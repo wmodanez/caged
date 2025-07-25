@@ -4,7 +4,6 @@ Conversor de Dados CAGED para formato Parquet
 Adaptado para estrutura mensal dos dados CAGED
 """
 
-import chardet
 import polars as pl
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -17,6 +16,8 @@ from src.Entity.saldo_mensal import SaldoMensal
 from src.Entity.exclusao import Exclusao
 from src.Entity.movimentacao_fora_prazo import MovimentacaoForaPrazo
 from src.Entity.indicador import Indicador
+
+from loguru import logger
 
 # Mapeamento de campos CAGED conforme especificado no roteiro
 MAPEAMENTO_CAMPOS_CAGED = {
@@ -91,31 +92,26 @@ class ConversorParquetCaged:
             str: Encoding detectado
         """
         try:
-            # Ler uma amostra do arquivo para detectar encoding
+            import chardet
             with open(arquivo, 'rb') as f:
-                raw_data = f.read(10000)  # Ler primeiros 10KB
-            
+                raw_data = f.read(10000)
             result = chardet.detect(raw_data)
             encoding = result['encoding']
             confidence = result['confidence']
-            
-            print(f"📝 Encoding detectado: {encoding} (confiança: {confidence:.2f})")
-            
-            # Fallbacks comuns para dados governamentais brasileiros
+            logger.info(f"📝 Encoding detectado: {encoding} (confiança: {confidence:.2f})")
             if confidence < 0.7:
                 for fallback in ['latin1', 'cp1252', 'utf-8']:
                     try:
                         with open(arquivo, 'r', encoding=fallback) as f:
-                            f.readline()  # Tentar ler primeira linha
-                        print(f"🔄 Usando fallback: {fallback}")
+                            f.readline()
+                        logger.info(f"🔄 Usando fallback: {fallback}")
                         return fallback
-                    except:
+                    except Exception as e:
+                        logger.warning(f"Falha no fallback de encoding {fallback}: {e}")
                         continue
-            
             return encoding or 'latin1'
-            
         except Exception as e:
-            print(f"⚠️  Erro na detecção de encoding: {e}. Usando latin1 como padrão")
+            logger.error(f"⚠️  Erro na detecção de encoding: {e}. Usando latin1 como padrão", exc_info=True)
             return 'latin1'
     
     def processar_arquivo_mensal(self, 
@@ -136,19 +132,13 @@ class ConversorParquetCaged:
             Tuple[DataFrame, List[Movimentacao], List[SaldoMensal], List[Indicador]]: Dados processados
         """
         if not arquivo.exists():
+            logger.error(f"Arquivo não encontrado: {arquivo}")
             raise FileNotFoundError(f"Arquivo não encontrado: {arquivo}")
-        
-        print(f"📊 Processando: {arquivo.name}")
-        
-        # Detectar encoding
+        logger.info(f"📊 Processando: {arquivo.name}")
         encoding = self.detectar_encoding(arquivo)
-        
         try:
-            # Tentar determinar delimitador
             separador = self._detectar_separador(arquivo, encoding)
-            print(f"🔗 Separador detectado: '{separador}'")
-            
-            # Ler arquivo com Polars
+            logger.info(f"🔗 Separador detectado: '{separador}'")
             df = pl.read_csv(
                 arquivo,
                 separator=separador,
@@ -157,43 +147,28 @@ class ConversorParquetCaged:
                 ignore_errors=True,
                 truncate_ragged_lines=True
             )
-            
-            print(f"📋 Arquivo lido: {df.shape[0]} linhas, {df.shape[1]} colunas")
-            
-            # Padronizar nomes das colunas
+            logger.info(f"📋 Arquivo lido: {df.shape[0]} linhas, {df.shape[1]} colunas")
             df = self._padronizar_colunas(df)
-            
-            # Filtrar campos se especificado
             if campos_selecionados:
                 campos_disponiveis = [c for c in campos_selecionados if c in df.columns]
                 df = df.select(campos_disponiveis)
-                print(f"🎯 Campos selecionados: {len(campos_disponiveis)}")
-            
-            # Aplicar tipos de dados
+                logger.info(f"🎯 Campos selecionados: {len(campos_disponiveis)}")
             df = self._aplicar_tipos_dados(df)
-            
-            # Adicionar metadados temporais
             df = df.with_columns([
                 pl.lit(f"{ano}-{mes:02d}").alias("ANO_MES"),
                 pl.lit(ano).alias("ANO"),
                 pl.lit(mes).alias("MES")
             ])
-            
-            # Validar integridade dos dados
             if self.validar_integridade_dados(df):
-                print("✅ Dados validados com sucesso")
+                logger.info("✅ Dados validados com sucesso")
             else:
-                print("⚠️  Alertas encontrados na validação")
-            
-            # Converter para entidades
+                logger.warning("⚠️  Alertas encontrados na validação")
             movimentacoes = self._dataframe_para_movimentacoes(df, ano, mes)
             saldos_mensais = self._calcular_saldos_mensais(df, ano, mes)
             indicadores = self._gerar_indicadores(df, ano, mes)
-            
             return df, movimentacoes, saldos_mensais, indicadores
-            
         except Exception as e:
-            print(f"❌ Erro ao processar arquivo: {e}")
+            logger.error(f"❌ Erro ao processar arquivo: {e}", exc_info=True)
             raise
     
     def _dataframe_para_movimentacoes(self, df: pl.DataFrame, ano: int, mes: int) -> List[Movimentacao]:
@@ -426,14 +401,18 @@ class ConversorParquetCaged:
             
         # Contar ocorrências de cada separador
         contadores = {sep: primeira_linha.count(sep) for sep in separadores}
-        
-        # Retornar o separador mais frequente
-        separador = max(contadores, key=contadores.get)
-        
-        # Se nenhum separador foi encontrado, usar ponto e vírgula (padrão brasileiro)
-        if contadores[separador] == 0:
+
+        # Garantir que há pelo menos um separador
+        if not contadores:
             separador = ';'
-            
+        else:
+            # Retornar o separador mais frequente
+            separador = max(contadores, key=lambda k: contadores[k])
+
+            # Se nenhum separador foi encontrado, usar ponto e vírgula (padrão brasileiro)
+            if contadores[separador] == 0:
+                separador = ';'
+
         return separador
     
     def _padronizar_colunas(self, df: pl.DataFrame) -> pl.DataFrame:
@@ -688,6 +667,29 @@ class ConversorParquetCaged:
         print(f"   💾 Tamanho: {tamanho_arquivo:.2f} MB")
         
         return True, movimentacoes_totais, saldos_totais, indicadores_totais
+    
+    def descompactar_mensal(self, ano: int, mes: int) -> bool:
+        """
+        Descompacta arquivos mensais de dados CAGED
+        
+        Args:
+            ano: Ano dos dados
+            mes: Mês dos dados
+            
+        Returns:
+            bool: True se descompactação bem-sucedida
+        """
+        diretorio_mes = self.diretorio_origem / f"{ano}" / f"{mes:02d}"
+        arquivos_7z = list(diretorio_mes.glob("*.7z"))
+        
+        print(f"🔄 Descompactando arquivos em {diretorio_mes}")
+        
+        for arquivo_7z in arquivos_7z:
+            diretorio_destino = self.diretorio_destino / f"{ano}" / f"{mes:02d}"
+            diretorio_destino.mkdir(parents=True, exist_ok=True)
+            self.descompactar_arquivo(arquivo_7z, diretorio_destino)
+
+        return True
 
 
 # Função auxiliar para teste
@@ -718,4 +720,4 @@ def testar_conversor():
 
 
 if __name__ == "__main__":
-    testar_conversor() 
+    testar_conversor()

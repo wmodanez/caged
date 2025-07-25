@@ -4,7 +4,6 @@ Descompactador de Arquivos CAGED
 Módulo para descompactar arquivos .7z baixados do CAGED
 """
 
-import py7zr
 import re
 from pathlib import Path
 from typing import List, Optional, Dict, Tuple
@@ -37,6 +36,9 @@ class DescompactadorCaged:
         self.diretorio_origem = Path(diretorio_origem)
         self.diretorio_destino = Path(diretorio_destino)
         self.metadados_arquivos: Dict[str, Dict] = {}
+
+        from loguru import logger
+        self.logger = logger
         
     def descompactar_arquivo(self, arquivo_7z: Path, destino: Optional[Path] = None) -> Tuple[bool, Dict]:
         """
@@ -50,7 +52,7 @@ class DescompactadorCaged:
             Tuple[bool, Dict]: (Sucesso, Metadados do arquivo)
         """
         if not arquivo_7z.exists():
-            print(f"❌ Arquivo não encontrado: {arquivo_7z}")
+            self.logger.error(f"❌ Arquivo não encontrado: {arquivo_7z}")
             return False, {}
         
         # Extrair metadados do nome do arquivo
@@ -64,30 +66,20 @@ class DescompactadorCaged:
         destino.mkdir(parents=True, exist_ok=True)
         
         try:
-            print(f"📦 Descompactando: {arquivo_7z.name}")
-            
+            self.logger.info(f"📦 Descompactando: {arquivo_7z.name}")
+            import py7zr
             with py7zr.SevenZipFile(arquivo_7z, mode='r') as archive:
-                # Listar arquivos no .7z
                 arquivos_internos = archive.getnames()
-                print(f"   📋 {len(arquivos_internos)} arquivos encontrados")
-                
-                # Extrair todos os arquivos
+                self.logger.info(f"   📋 {len(arquivos_internos)} arquivos encontrados")
                 archive.extractall(path=destino)
-                
-                # Adicionar informações sobre arquivos extraídos aos metadados
                 metadados["arquivos_extraidos"] = arquivos_internos
                 metadados["data_descompactacao"] = datetime.now().isoformat()
                 metadados["destino"] = str(destino)
-                
-            print(f"✅ Descompactado com sucesso em: {destino}")
-            
-            # Armazenar metadados
+            self.logger.info(f"✅ Descompactado com sucesso em: {destino}")
             self.metadados_arquivos[arquivo_7z.name] = metadados
-            
             return True, metadados
-            
         except Exception as e:
-            print(f"❌ Erro ao descompactar {arquivo_7z.name}: {e}")
+            self.logger.error(f"❌ Erro ao descompactar {arquivo_7z.name}: {e}", exc_info=True)
             return False, {"erro": str(e)}
     
     def descompactar_mensal(self, ano: int, mes: int) -> Tuple[bool, List[Dict]]:
@@ -108,17 +100,17 @@ class DescompactadorCaged:
         
         # Verificar se o diretório de origem existe
         if not diretorio_origem_mes.exists():
-            print(f"❌ Diretório não encontrado: {diretorio_origem_mes}")
+            self.logger.error(f"❌ Diretório não encontrado: {diretorio_origem_mes}")
             return False, []
         
         # Encontrar arquivos .7z no diretório específico do mês
         arquivos_7z = list(diretorio_origem_mes.glob("*.7z"))
         
         if not arquivos_7z:
-            print(f"❌ Nenhum arquivo .7z encontrado para {ano}/{mes:02d}")
+            self.logger.error(f"❌ Nenhum arquivo .7z encontrado para {ano}/{mes:02d}")
             return False, []
         
-        print(f"🎯 Descompactando {len(arquivos_7z)} arquivos de {ano}/{mes:02d}")
+        self.logger.info(f"🎯 Descompactando {len(arquivos_7z)} arquivos de {ano}/{mes:02d}")
         
         # Criar diretório de destino
         diretorio_destino_mes.mkdir(parents=True, exist_ok=True)
@@ -133,7 +125,7 @@ class DescompactadorCaged:
                 sucessos += 1
                 metadados_lista.append(metadados)
         
-        print(f"📊 Descompactação concluída: {sucessos}/{len(arquivos_7z)} arquivos")
+        self.logger.info(f"📊 Descompactação concluída: {sucessos}/{len(arquivos_7z)} arquivos")
         
         # Criar indicador para a competência
         self._criar_indicador_competencia(ano, mes, sucessos, len(arquivos_7z))
@@ -155,10 +147,10 @@ class DescompactadorCaged:
         arquivos_7z = list(self.diretorio_origem.rglob(padrao))
         
         if not arquivos_7z:
-            print(f"❌ Nenhum arquivo .7z encontrado" + (f" para {ano}" if ano else ""))
+            self.logger.error(f"❌ Nenhum arquivo .7z encontrado" + (f" para {ano}" if ano else ""))
             return False, []
         
-        print(f"🎯 Descompactando {len(arquivos_7z)} arquivos" + (f" de {ano}" if ano else ""))
+        self.logger.info(f"🎯 Descompactando {len(arquivos_7z)} arquivos" + (f" de {ano}" if ano else ""))
         
         sucessos = 0
         metadados_lista = []
@@ -177,7 +169,7 @@ class DescompactadorCaged:
                 sucessos += 1
                 metadados_lista.append(metadados)
         
-        print(f"📊 Descompactação concluída: {sucessos}/{len(arquivos_7z)} arquivos")
+        self.logger.info(f"📊 Descompactação concluída: {sucessos}/{len(arquivos_7z)} arquivos")
         
         # Agrupar por competência e criar indicadores
         if ano:
@@ -245,12 +237,12 @@ class DescompactadorCaged:
         # Extrair ano
         ano_match = re.search(r'(20\d{2})', nome_arquivo)
         if ano_match:
-            metadados["ano"] = int(ano_match.group(1))
+            metadados["ano"] = ano_match.group(1)
         
         # Extrair mês
         mes_match = re.search(r'(20\d{2})(\d{2})', nome_arquivo)
         if mes_match and 1 <= int(mes_match.group(2)) <= 12:
-            metadados["mes"] = int(mes_match.group(2))
+            metadados["mes"] = mes_match.group(2)
         
         # Tentar identificar UF
         ufs = ["AC", "AL", "AM", "AP", "BA", "CE", "DF", "ES", "GO", "MA", 

@@ -503,24 +503,24 @@ def status():
     click.echo("=" * 40)
     
     try:
-    # Verificar arquivos baixados
-    files_zip = Path("files-zip")
-    if files_zip.exists():
-        zip_count = len(list(files_zip.rglob("*.7z")))
+        # Verificar arquivos baixados
+        files_zip = Path("files-zip")
+        if files_zip.exists():
+            zip_count = len(list(files_zip.rglob("*.7z")))
             click.echo(f"📦 Arquivos baixados (.7z): {zip_count}")
         
-        # Verificar arquivos descompactados
-        files_unzip = Path("files-unzip")
-        if files_unzip.exists():
-            txt_count = len(list(files_unzip.rglob("*.txt")))
-            csv_count = len(list(files_unzip.rglob("*.csv")))
-            click.echo(f"📁 Arquivos descompactados (.txt): {txt_count}")
-            click.echo(f"📁 Arquivos descompactados (.csv): {csv_count}")
-    
-    # Verificar arquivos processados
-    parquet_dir = Path("parquet")
-    if parquet_dir.exists():
-        parquet_count = len(list(parquet_dir.rglob("*.parquet")))
+            # Verificar arquivos descompactados
+            files_unzip = Path("files-unzip")
+            if files_unzip.exists():
+                txt_count = len(list(files_unzip.rglob("*.txt")))
+                csv_count = len(list(files_unzip.rglob("*.csv")))
+                click.echo(f"📁 Arquivos descompactados (.txt): {txt_count}")
+                click.echo(f"📁 Arquivos descompactados (.csv): {csv_count}")
+        
+        # Verificar arquivos processados
+        parquet_dir = Path("parquet")
+        if parquet_dir.exists():
+            parquet_count = len(list(parquet_dir.rglob("*.parquet")))
             click.echo(f"📊 Arquivos processados (.parquet): {parquet_count}")
         
         # Testar conexão FTP
@@ -532,7 +532,6 @@ def status():
             click.echo("❌ Conexão FTP: Falha")
         
         click.echo("\n✅ Status exibido!")
-        
     except Exception as e:
         logger.error(f"Erro ao exibir status: {e}")
         click.echo(f"❌ Erro ao exibir status: {e}")
