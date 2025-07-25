@@ -33,30 +33,59 @@ venv\Scripts\activate     # Windows
 pip install -r requirements.txt
 ```
 
-## 🎯 Uso Básico
+## 🎯 Comandos Disponíveis
 
-### Download de Dados
+### 📥 Download de Dados
 ```bash
-# Baixar dados de janeiro/2024
+# Apenas baixar dados de janeiro/2024
 python main.py baixar --ano 2024 --mes 1
 
 # Baixar primeiro semestre
 python main.py baixar --ano 2024 --mes-inicio 1 --mes-fim 6
 
-# Baixar UFs específicas
-python main.py baixar --ano 2024 --mes 1 --ufs SP RJ MG
+# Baixar todos os meses de um ano específico
+python main.py baixar --ano 2024 --todos-meses
+
+# Baixar todos os anos disponíveis no FTP
+python main.py baixar --todos-anos
 ```
 
-### Processamento
+> **📝 Nota**: Os arquivos CAGED contêm dados de todas as UFs em um único arquivo por competência. A filtragem por UF deve ser feita após o download e descompactação dos dados.
+
+### 📦 Descompactação
 ```bash
-# Converter dados mensais
-python main.py converter --ano 2024 --mes 1
+# Apenas descompactar arquivos já baixados
+python main.py apenas-descompactar --ano 2024 --mes 1
 
-# Consolidação anual
-python main.py converter --ano 2024 --consolidacao-anual
+# Descompactar todos os arquivos de um ano
+python main.py apenas-descompactar --ano 2024 --todos
+
+# Baixar e descompactar
+python main.py descompactar --ano 2024 --mes 1
 ```
 
-### Status do Projeto
+### 🔄 Conversão
+```bash
+# Apenas converter arquivos já baixados
+python main.py apenas-converter --ano 2024 --mes 1
+
+# Converter ano completo
+python main.py apenas-converter --ano 2024 --consolidacao-anual
+
+# Baixar e converter
+python main.py converter --ano 2024 --mes 1
+```
+
+### 🚀 Processamento Completo
+```bash
+# Processamento completo: baixar, descompactar e converter
+python main.py completo --ano 2024 --mes 1
+
+# Processamento completo do ano
+python main.py completo --ano 2024 --consolidacao-anual
+```
+
+### 📊 Status do Projeto
 ```bash
 # Verificar arquivos processados
 python main.py status
