@@ -61,9 +61,9 @@ class IntegradorCagedDashboard:
             
             # Descompactar arquivos
             if mes:
-                descompactador.descompactar_por_mes(ano, mes, callback=callback_progresso)
+                sucesso, metadados = descompactador.descompactar_mensal(ano, mes)
             else:
-                descompactador.descompactar_por_ano(ano, callback=callback_progresso)
+                sucesso, metadados = descompactador.descompactar_todos(ano)
             
             # Atualizar status para concluído
             atualizar_processamento(
@@ -89,7 +89,10 @@ class IntegradorCagedDashboard:
             processamento_id = registrar_processamento('converter', ano, mes)
         
         try:
-            conversor = ConversorParquet()
+            # Usar caminhos absolutos para os diretórios
+            diretorio_origem = os.path.abspath('files-unzip')
+            diretorio_destino = os.path.abspath('parquet')
+            conversor = ConversorParquet(diretorio_origem=diretorio_origem, diretorio_destino=diretorio_destino)
             
             # Configurar callback para atualizar progresso
             def callback_progresso(atual, total):
@@ -98,18 +101,27 @@ class IntegradorCagedDashboard:
             
             # Converter arquivos
             if mes:
-                conversor.converter_por_mes(ano, mes, callback=callback_progresso)
+                sucesso, movimentacoes, saldos, indicadores = conversor.converter_mensal(ano, mes)
             else:
-                conversor.converter_por_ano(ano, callback=callback_progresso)
+                sucesso, movimentacoes, saldos, indicadores = conversor.consolidar_anual(ano)
             
-            # Atualizar status para concluído
-            atualizar_processamento(
-                processamento_id, 
-                status='concluido', 
-                progresso=100.0,
-                mensagem='Conversão concluída com sucesso!'
-            )
-            return True
+            # Atualizar status baseado no resultado da conversão
+            if sucesso:
+                atualizar_processamento(
+                    processamento_id, 
+                    status='concluido', 
+                    progresso=100.0,
+                    mensagem='Conversão concluída com sucesso!'
+                )
+                return True
+            else:
+                atualizar_processamento(
+                    processamento_id, 
+                    status='erro', 
+                    progresso=0.0,
+                    mensagem='Erro na conversão: nenhum arquivo foi processado com sucesso'
+                )
+                return False
         except Exception as e:
             # Atualizar status para erro
             atualizar_processamento(

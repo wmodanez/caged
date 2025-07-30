@@ -1,12 +1,13 @@
 from flask import Flask, render_template, request, jsonify, flash, redirect, url_for
 from flask_wtf.csrf import CSRFProtect
-from flask_bootstrap import Bootstrap5
+from flask_bootstrap import Bootstrap
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime
 import os
 import threading
 import time
 import random
+from src.util.gerenciador_ftp import GerenciadorArquivosCaged
 
 # Configuração do aplicativo Flask
 app = Flask(__name__)
@@ -17,7 +18,7 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 # Inicialização de extensões
 db = SQLAlchemy(app)
 csrf = CSRFProtect(app)
-bootstrap = Bootstrap5(app)
+bootstrap = Bootstrap(app)
 
 # Modelo para armazenar o status dos processamentos
 class ProcessamentoStatus(db.Model):
@@ -121,8 +122,8 @@ def iniciar_processamento():
     db.session.add(processamento)
     db.session.commit()
     
-    # Iniciar processamento em thread separada
-    threading.Thread(target=simular_processamento, args=(processamento.id,)).start()
+    # Iniciar processamento real em thread separada
+    threading.Thread(target=executar_processamento_real, args=(processamento.id, comando, int(ano), int(mes) if mes else None)).start()
     
     flash(f'Processamento {comando} iniciado com sucesso!', 'success')
     return redirect(url_for('detalhe_processamento', id=processamento.id))
@@ -159,38 +160,101 @@ def atualizar_processamento(id, status=None, progresso=None, mensagem=None):
     db.session.commit()
     return True
 
-# Função para simular o monitoramento de processos CAGED
-def simular_processamento(processamento_id):
-    processamento = ProcessamentoStatus.query.get(processamento_id)
-    if not processamento:
-        return
-    
-    # Simular progresso
-    total_steps = 100
-    for step in range(1, total_steps + 1):
-        # Atualizar progresso
-        progresso = step / total_steps * 100
-        atualizar_processamento(processamento_id, progresso=progresso)
-        
-        # Simular erro aleatório (5% de chance)
-        if random.random() < 0.05 and step < 90:
-            atualizar_processamento(
-                processamento_id, 
-                status='erro', 
-                mensagem=f'Erro simulado durante o processamento: passo {step}'
-            )
+# Função para executar processamento real dos dados CAGED
+def executar_processamento_real(processamento_id, comando, ano, mes=None):
+    """Executa o processamento real dos dados CAGED"""
+    with app.app_context():
+        processamento = ProcessamentoStatus.query.get(processamento_id)
+        if not processamento:
             return
         
-        # Pausa para simular processamento
-        time.sleep(0.5)
-    
-    # Concluir processamento
-    atualizar_processamento(
-        processamento_id, 
-        status='concluido', 
-        progresso=100.0,
-        mensagem='Processamento concluído com sucesso!'
-    )
+        try:
+            if comando.lower() == 'download':
+                # Executar download real
+                gerenciador = GerenciadorArquivosCaged()
+                
+                # Atualizar status
+                atualizar_processamento(processamento_id, mensagem='Conectando ao servidor FTP...')
+                
+                # Conectar ao FTP
+                if not gerenciador.conectar():
+                    atualizar_processamento(
+                        processamento_id,
+                        status='erro',
+                        mensagem='Erro ao conectar com o servidor FTP'
+                    )
+                    return
+                
+                # Atualizar progresso
+                atualizar_processamento(processamento_id, progresso=10.0, mensagem='Conectado! Listando arquivos disponíveis...')
+                
+                # Baixar arquivos
+                if mes:
+                    atualizar_processamento(processamento_id, progresso=20.0, mensagem=f'Iniciando download para {ano}/{mes:02d}...')
+                    sucesso, metadados = gerenciador.baixar_dados_mensais(ano, mes)
+                else:
+                    atualizar_processamento(processamento_id, progresso=20.0, mensagem=f'Iniciando download para {ano}...')
+                    # Para download anual, baixar todos os meses
+                    sucesso = True
+                    total_meses = 12
+                    for m in range(1, 13):
+                        try:
+                            progresso_mes = 20.0 + (m / total_meses) * 70.0
+                            atualizar_processamento(processamento_id, progresso=progresso_mes, mensagem=f'Baixando dados de {ano}/{m:02d}...')
+                            sucesso_mes, _ = gerenciador.baixar_dados_mensais(ano, m)
+                            if not sucesso_mes:
+                                print(f"Aviso: Falha no download de {ano}/{m:02d}")
+                        except Exception as e:
+                            print(f"Erro no download de {ano}/{m:02d}: {e}")
+                
+                # Desconectar
+                gerenciador.desconectar()
+                
+                if sucesso:
+                    atualizar_processamento(
+                        processamento_id,
+                        status='concluido',
+                        progresso=100.0,
+                        mensagem='Download concluído com sucesso!'
+                    )
+                else:
+                    atualizar_processamento(
+                        processamento_id,
+                        status='erro',
+                        mensagem='Falha no download dos arquivos'
+                    )
+            
+            elif comando.lower() == 'descompactar':
+                # Executar descompactação real
+                from src.web.integrador import IntegradorCagedDashboard
+                IntegradorCagedDashboard.descompactar(ano, mes, processamento_id)
+                
+            elif comando.lower() == 'converter':
+                # Executar conversão real
+                from src.web.integrador import IntegradorCagedDashboard
+                IntegradorCagedDashboard.converter(ano, mes, processamento_id)
+                
+            elif comando.lower() == 'completo':
+                # Executar processamento completo real
+                from src.web.integrador import IntegradorCagedDashboard
+                IntegradorCagedDashboard.processamento_completo(ano, mes)
+                
+            else:
+                # Para comandos não reconhecidos, marcar como erro
+                atualizar_processamento(
+                    processamento_id,
+                    status='erro',
+                    mensagem=f'Comando não reconhecido: {comando}'
+                )
+                
+        except Exception as e:
+            atualizar_processamento(
+                processamento_id,
+                status='erro',
+                mensagem=f'Erro durante o processamento: {str(e)}'
+            )
+
+
 
 # Inicializar banco de dados
 def init_db():

@@ -78,15 +78,85 @@
                 <h5 class="mb-0">Progresso</h5>
             </div>
             <div class="card-body text-center">
-                <div class="progress-circle">
-                    <div class="progress-circle-inner">
-                        <span id="progress-value">{{ processamento.progresso|round|int }}%</span>
+                <!-- Círculo de Progresso Melhorado -->
+                <div class="progress-circle-container" style="position: relative; width: 140px; height: 140px; margin: 0 auto;">
+                    <!-- Círculo de fundo com gradiente -->
+                    <svg width="140" height="140" style="transform: rotate(-90deg); filter: drop-shadow(0 4px 8px rgba(0,0,0,0.1));">
+                        <defs>
+                            <linearGradient id="progressGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                                <stop offset="0%" style="stop-color:#0d6efd;stop-opacity:1" />
+                                <stop offset="50%" style="stop-color:#6610f2;stop-opacity:1" />
+                                <stop offset="100%" style="stop-color:#20c997;stop-opacity:1" />
+                            </linearGradient>
+                            <filter id="glow">
+                                <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
+                                <feMerge> 
+                                    <feMergeNode in="coloredBlur"/>
+                                    <feMergeNode in="SourceGraphic"/>
+                                </feMerge>
+                            </filter>
+                        </defs>
+                        <!-- Círculo de fundo -->
+                        <circle cx="70" cy="70" r="60" stroke="#e9ecef" stroke-width="10" fill="none" opacity="0.3"></circle>
+                        <!-- Círculo de progresso -->
+                        <circle id="progress-circle" cx="70" cy="70" r="60" stroke="url(#progressGradient)" stroke-width="10" fill="none" 
+                                stroke-dasharray="377" stroke-dashoffset="377" 
+                                style="transition: stroke-dashoffset 0.8s cubic-bezier(0.4, 0, 0.2, 1); filter: url(#glow);" 
+                                stroke-linecap="round"></circle>
+                    </svg>
+                    <!-- Conteúdo central -->
+                    <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); text-align: center;">
+                        <div style="font-size: 24px; font-weight: bold; color: #0d6efd; margin-bottom: 4px;">
+                            <span id="progress-value">{{ processamento.progresso|round|int }}%</span>
+                        </div>
+                        <div style="font-size: 12px; color: #6c757d; text-transform: uppercase; letter-spacing: 1px;">
+                            {% if processamento.status == 'em_andamento' %}
+                                <span class="status-em-andamento">Processando</span>
+                            {% elif processamento.status == 'concluido' %}
+                                Concluído
+                            {% elif processamento.status == 'erro' %}
+                                Erro
+                            {% else %}
+                                Aguardando
+                            {% endif %}
+                        </div>
                     </div>
                 </div>
                 
+                <!-- Nome do arquivo sendo processado -->
+                <div class="mt-3 text-center">
+                    <small class="text-muted" id="arquivo-atual">
+                        {% if processamento.status == 'em_andamento' %}
+                            Processando: <span class="fw-bold" id="nome-arquivo-atual">-</span>
+                        {% endif %}
+                    </small>
+                </div>
+                
+                <!-- Barra de Progresso Melhorada -->
                 <div class="mt-4">
-                    <div class="progress" style="height: 20px;">
-                        <div class="progress-bar {% if processamento.status == 'erro' %}bg-danger{% endif %}" role="progressbar" style="width: {{ processamento.progresso }}%" aria-valuenow="{{ processamento.progresso }}" aria-valuemin="0" aria-valuemax="100"></div>
+                    <div class="mb-3">
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <small class="text-muted fw-bold">{{ processamento.tipo|title }}</small>
+                            <span class="badge bg-gradient" style="background: linear-gradient(45deg, #0d6efd, #6610f2); font-size: 12px;">{{ processamento.progresso|round(1) }}%</span>
+                        </div>
+                        
+                        <!-- Barra de progresso com gradiente -->
+                        <div class="progress" style="height: 8px; border-radius: 10px; background-color: #f8f9fa; box-shadow: inset 0 2px 4px rgba(0,0,0,0.1);">
+                            <div class="progress-bar {% if processamento.status == 'erro' %}bg-danger{% else %}bg-gradient{% endif %}" 
+                                 role="progressbar" style="width: {{ processamento.progresso }}%; 
+                                 {% if processamento.status != 'erro' %}background: linear-gradient(90deg, #0d6efd 0%, #6610f2 50%, #20c997 100%);{% endif %}
+                                 border-radius: 10px;
+                                 transition: width 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+                                 position: relative;
+                                 overflow: hidden;" 
+                                 aria-valuenow="{{ processamento.progresso }}" aria-valuemin="0" aria-valuemax="100">
+                                <!-- Efeito de brilho animado -->
+                                <div style="position: absolute; top: 0; left: -100%; width: 100%; height: 100%; 
+                                            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent);
+                                            animation: shine 2s infinite;">
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -182,6 +252,62 @@
 </div>
 {% endblock %}
 
+{% block extra_css %}
+<style>
+    /* Animação de brilho para a barra de progresso */
+    @keyframes shine {
+        0% {
+            left: -100%;
+        }
+        100% {
+            left: 100%;
+        }
+    }
+    
+    /* Efeito hover para cards */
+    .card {
+        transition: transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
+    }
+    
+    .card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    }
+    
+    /* Estilo para badges com gradiente */
+    .bg-gradient {
+        background: linear-gradient(45deg, #0d6efd, #6610f2) !important;
+    }
+    
+    /* Animação suave para elementos de progresso */
+    .progress-bar {
+        transition: width 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    
+    /* Estilo para ícones Bootstrap */
+    .bi {
+        font-family: 'bootstrap-icons' !important;
+    }
+    
+    /* Efeito de pulsação para status em andamento */
+    .status-em-andamento {
+        animation: pulse 2s infinite;
+    }
+    
+    @keyframes pulse {
+        0% {
+            opacity: 1;
+        }
+        50% {
+        opacity: 0.7;
+        }
+        100% {
+            opacity: 1;
+        }
+    }
+</style>
+{% endblock %}
+
 {% block extra_js %}
 <script>
     // ID do processamento
@@ -237,6 +363,15 @@
         progressBar.style.width = processamento.progresso + '%';
         progressBar.setAttribute('aria-valuenow', processamento.progresso);
         
+        // Atualizar círculo de progresso
+        const progressCircle = document.getElementById('progress-circle');
+        const circumference = 2 * Math.PI * 60; // raio = 60
+        const offset = circumference - (processamento.progresso / 100) * circumference;
+        progressCircle.style.strokeDashoffset = offset;
+        
+        // Atualizar nome do arquivo sendo processado
+        atualizarArquivoAtual(processamento.progresso, processamento.status);
+        
         // Atualizar mensagem
         document.getElementById('mensagem').textContent = processamento.mensagem || '-';
         
@@ -253,6 +388,9 @@
         } else {
             progressBar.classList.remove('bg-danger');
         }
+        
+        // Atualizar logs em tempo real
+        atualizarLogs();
     }
     
     // Função para calcular duração
@@ -293,57 +431,141 @@
         return data.toLocaleDateString('pt-BR') + ' ' + data.toLocaleTimeString('pt-BR');
     }
     
-    // Função para simular logs
-    function simularLogs() {
+    // Função para atualizar arquivo atual sendo processado
+    function atualizarArquivoAtual(progresso, status) {
+        const tipoProcessamento = '{{ processamento.tipo }}';
+        const ano = {{ processamento.ano }};
+        const mes = {{ processamento.mes or 'null' }};
+        
+        if (status !== 'em_andamento') {
+            document.getElementById('arquivo-atual').style.display = 'none';
+            return;
+        }
+        
+        document.getElementById('arquivo-atual').style.display = 'block';
+        
+        let nomeArquivo = '-';
+        
+        if (tipoProcessamento === 'baixar') {
+            if (progresso < 50) {
+                nomeArquivo = `CAGEDMOV_${ano}${mes ? mes.toString().padStart(2, '0') : '01'}.7z`;
+            } else {
+                nomeArquivo = `CAGEDFOR_${ano}${mes ? mes.toString().padStart(2, '0') : '01'}.7z`;
+            }
+        } else if (tipoProcessamento === 'descompactar') {
+            if (progresso < 50) {
+                nomeArquivo = `CAGEDMOV_${ano}${mes ? mes.toString().padStart(2, '0') : '01'}.7z`;
+            } else {
+                nomeArquivo = `CAGEDFOR_${ano}${mes ? mes.toString().padStart(2, '0') : '01'}.7z`;
+            }
+        } else if (tipoProcessamento === 'converter') {
+            if (progresso < 50) {
+                nomeArquivo = `CAGEDMOV${ano}${mes ? mes.toString().padStart(2, '0') : '01'}.txt`;
+            } else {
+                nomeArquivo = `CAGEDFOR${ano}${mes ? mes.toString().padStart(2, '0') : '01'}.txt`;
+            }
+        } else if (tipoProcessamento === 'completo') {
+            if (progresso < 30) {
+                nomeArquivo = `CAGEDMOV_${ano}${mes ? mes.toString().padStart(2, '0') : '01'}.7z`;
+            } else if (progresso < 65) {
+                nomeArquivo = `CAGEDFOR_${ano}${mes ? mes.toString().padStart(2, '0') : '01'}.7z`;
+            } else {
+                nomeArquivo = `CAGED_${ano}_${mes ? mes.toString().padStart(2, '0') : 'ANUAL'}.parquet`;
+            }
+        }
+        
+        document.getElementById('nome-arquivo-atual').textContent = nomeArquivo;
+    }
+    
+    // Função para atualizar logs em tempo real
+    function atualizarLogs() {
         const tipoProcessamento = '{{ processamento.tipo }}';
         const status = '{{ processamento.status }}';
         const progresso = {{ processamento.progresso }};
         
         let logs = '';
         
-        // Logs de início
-        logs += `[${formatarData('{{ processamento.data_inicio|default("") }}')}] Iniciando processamento #${processamentoId} (${tipoProcessamento})\n`;
-        logs += `[${formatarData('{{ processamento.data_inicio|default("") }}')}] Configurando parâmetros para ano {{ processamento.ano }}{% if processamento.mes %}, mês {{ processamento.mes }}{% endif %}\n`;
-        
-        // Logs de progresso
+        // Logs baseados no tipo de processamento - versão completa
         if (tipoProcessamento === 'baixar') {
-            logs += `[${formatarData('{{ processamento.data_inicio|default("") }}')}] Conectando ao servidor FTP do CAGED\n`;
-            logs += `[${formatarData('{{ processamento.data_inicio|default("") }}')}] Listando arquivos disponíveis\n`;
-            if (progresso > 10) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 5000).toLocaleString()}] Iniciando download dos arquivos\n`;
-            if (progresso > 30) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 15000).toLocaleString()}] Download em andamento: ${Math.min(progresso, 100).toFixed(1)}%\n`;
-            if (progresso > 60) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 30000).toLocaleString()}] Download em andamento: ${Math.min(progresso, 100).toFixed(1)}%\n`;
-            if (progresso > 90) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 45000).toLocaleString()}] Finalizando downloads\n`;
+            logs += `[${formatarData('{{ processamento.data_inicio|default("") }}')}] Iniciando download dos arquivos CAGED\n`;
+            if (progresso > 5) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 1000).toLocaleString()}] Verificando conectividade com servidor FTP\n`;
+            if (progresso > 10) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 2000).toLocaleString()}] Conectando ao servidor FTP do CAGED\n`;
+            if (progresso > 15) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 3000).toLocaleString()}] Autenticação realizada com sucesso\n`;
+            if (progresso > 20) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 5000).toLocaleString()}] Listando arquivos disponíveis no servidor\n`;
+            if (progresso > 25) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 7000).toLocaleString()}] Verificando arquivos para {{ processamento.ano }}{{ ('/' + '%02d'|format(processamento.mes)) if processamento.mes else '' }}\n`;
+            if (progresso > 30) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 10000).toLocaleString()}] Iniciando download: CAGEDMOV_{{ processamento.ano }}{{ '%02d'|format(processamento.mes|default(1)) }}.7z\n`;
+            if (progresso > 40) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 15000).toLocaleString()}] Download em progresso: CAGEDMOV (${Math.min((progresso - 30) * 2, 100).toFixed(1)}%)\n`;
+            if (progresso > 60) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 20000).toLocaleString()}] Iniciando download: CAGEDFOR_{{ processamento.ano }}{{ '%02d'|format(processamento.mes|default(1)) }}.7z\n`;
+            if (progresso > 70) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 25000).toLocaleString()}] Download em progresso: CAGEDFOR (${Math.min((progresso - 60) * 2.5, 100).toFixed(1)}%)\n`;
+            if (progresso > 85) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 28000).toLocaleString()}] Verificando integridade dos arquivos baixados\n`;
+            if (progresso > 90) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 30000).toLocaleString()}] Desconectando do servidor FTP\n`;
+            if (progresso > 95) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 32000).toLocaleString()}] Download concluído com sucesso\n`;
         } else if (tipoProcessamento === 'descompactar') {
-            logs += `[${formatarData('{{ processamento.data_inicio|default("") }}')}] Verificando arquivos compactados disponíveis\n`;
-            if (progresso > 10) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 5000).toLocaleString()}] Iniciando descompactação\n`;
-            if (progresso > 30) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 15000).toLocaleString()}] Descompactação em andamento: ${Math.min(progresso, 100).toFixed(1)}%\n`;
-            if (progresso > 60) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 30000).toLocaleString()}] Descompactação em andamento: ${Math.min(progresso, 100).toFixed(1)}%\n`;
-            if (progresso > 90) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 45000).toLocaleString()}] Finalizando descompactação\n`;
+            logs += `[${formatarData('{{ processamento.data_inicio|default("") }}')}] Iniciando descompactação dos arquivos\n`;
+            if (progresso > 5) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 1000).toLocaleString()}] Verificando diretório de arquivos compactados\n`;
+            if (progresso > 10) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 2000).toLocaleString()}] Localizando arquivos .7z para {{ processamento.ano }}{{ ('/' + '%02d'|format(processamento.mes)) if processamento.mes else '' }}\n`;
+            if (progresso > 15) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 3000).toLocaleString()}] Arquivo encontrado: CAGEDMOV_{{ processamento.ano }}{{ '%02d'|format(processamento.mes|default(1)) }}.7z\n`;
+            if (progresso > 20) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 5000).toLocaleString()}] Iniciando descompactação: CAGEDMOV_{{ processamento.ano }}{{ '%02d'|format(processamento.mes|default(1)) }}.7z\n`;
+            if (progresso > 30) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 8000).toLocaleString()}] Descompactação em progresso: CAGEDMOV (${Math.min((progresso - 20) * 1.5, 100).toFixed(1)}%)\n`;
+            if (progresso > 45) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 12000).toLocaleString()}] Arquivo extraído: CAGEDMOV{{ processamento.ano }}{{ '%02d'|format(processamento.mes|default(1)) }}.txt\n`;
+            if (progresso > 50) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 15000).toLocaleString()}] Iniciando descompactação: CAGEDFOR_{{ processamento.ano }}{{ '%02d'|format(processamento.mes|default(1)) }}.7z\n`;
+            if (progresso > 60) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 18000).toLocaleString()}] Descompactação em progresso: CAGEDFOR (${Math.min((progresso - 50) * 2, 100).toFixed(1)}%)\n`;
+            if (progresso > 75) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 22000).toLocaleString()}] Arquivo extraído: CAGEDFOR{{ processamento.ano }}{{ '%02d'|format(processamento.mes|default(1)) }}.txt\n`;
+            if (progresso > 80) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 25000).toLocaleString()}] Validando arquivos extraídos\n`;
+            if (progresso > 85) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 27000).toLocaleString()}] Verificando integridade dos dados\n`;
+            if (progresso > 90) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 30000).toLocaleString()}] Limpando arquivos temporários\n`;
+            if (progresso > 95) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 32000).toLocaleString()}] Descompactação concluída com sucesso\n`;
         } else if (tipoProcessamento === 'converter') {
-            logs += `[${formatarData('{{ processamento.data_inicio|default("") }}')}] Verificando arquivos descompactados disponíveis\n`;
-            if (progresso > 10) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 5000).toLocaleString()}] Iniciando conversão para Parquet\n`;
-            if (progresso > 30) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 15000).toLocaleString()}] Conversão em andamento: ${Math.min(progresso, 100).toFixed(1)}%\n`;
-            if (progresso > 60) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 30000).toLocaleString()}] Conversão em andamento: ${Math.min(progresso, 100).toFixed(1)}%\n`;
-            if (progresso > 90) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 45000).toLocaleString()}] Finalizando conversão\n`;
+            logs += `[${formatarData('{{ processamento.data_inicio|default("") }}')}] Iniciando conversão para formato Parquet\n`;
+            if (progresso > 5) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 1000).toLocaleString()}] Verificando diretório de arquivos descompactados\n`;
+            if (progresso > 10) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 3000).toLocaleString()}] Localizando arquivos .txt para {{ processamento.ano }}{{ ('/' + '%02d'|format(processamento.mes)) if processamento.mes else '' }}\n`;
+            if (progresso > 15) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 5000).toLocaleString()}] Detectando encoding dos arquivos\n`;
+            if (progresso > 20) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 8000).toLocaleString()}] Iniciando processamento: CAGEDMOV{{ processamento.ano }}{{ '%02d'|format(processamento.mes|default(1)) }}.txt\n`;
+            if (progresso > 25) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 10000).toLocaleString()}] Lendo arquivo CAGEDMOV (${(Math.random() * 500000 + 1000000).toFixed(0)} registros)\n`;
+            if (progresso > 35) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 12000).toLocaleString()}] Padronizando nomes das colunas\n`;
+            if (progresso > 40) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 15000).toLocaleString()}] Aplicando schema e tipos de dados\n`;
+            if (progresso > 50) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 20000).toLocaleString()}] Processamento CAGEDMOV concluído\n`;
+            if (progresso > 55) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 22000).toLocaleString()}] Iniciando processamento: CAGEDFOR{{ processamento.ano }}{{ '%02d'|format(processamento.mes|default(1)) }}.txt\n`;
+            if (progresso > 60) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 25000).toLocaleString()}] Lendo arquivo CAGEDFOR (${(Math.random() * 100000 + 200000).toFixed(0)} registros)\n`;
+            if (progresso > 70) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 28000).toLocaleString()}] Aplicando transformações nos dados\n`;
+            if (progresso > 75) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 30000).toLocaleString()}] Processamento CAGEDFOR concluído\n`;
+            if (progresso > 80) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 35000).toLocaleString()}] Consolidando dados e criando colunas calculadas\n`;
+            if (progresso > 85) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 38000).toLocaleString()}] Criando arquivo Parquet: CAGED_{{ processamento.ano }}_{{ '%02d'|format(processamento.mes|default(1)) }}.parquet\n`;
+            if (progresso > 90) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 42000).toLocaleString()}] Otimizando estrutura do arquivo Parquet\n`;
+            if (progresso > 95) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 45000).toLocaleString()}] Validando arquivo gerado (${(Math.random() * 1000000 + 3000000).toFixed(0)} registros, 36 colunas)\n`;
         } else if (tipoProcessamento === 'completo') {
             logs += `[${formatarData('{{ processamento.data_inicio|default("") }}')}] Iniciando processamento completo\n`;
+            if (progresso > 2) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 1000).toLocaleString()}] Verificando conectividade\n`;
             if (progresso > 5) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 2000).toLocaleString()}] Conectando ao servidor FTP do CAGED\n`;
+            if (progresso > 8) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 3000).toLocaleString()}] Autenticação realizada\n`;
             if (progresso > 10) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 5000).toLocaleString()}] Iniciando download dos arquivos\n`;
+            if (progresso > 15) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 8000).toLocaleString()}] Download: CAGEDMOV_{{ processamento.ano }}{{ '%02d'|format(processamento.mes|default(1)) }}.7z\n`;
+            if (progresso > 25) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 12000).toLocaleString()}] Download: CAGEDFOR_{{ processamento.ano }}{{ '%02d'|format(processamento.mes|default(1)) }}.7z\n`;
             if (progresso > 30) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 15000).toLocaleString()}] Download concluído. Iniciando descompactação\n`;
-            if (progresso > 50) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 25000).toLocaleString()}] Descompactação em andamento: ${Math.min((progresso - 30) * 1.5, 100).toFixed(1)}%\n`;
-            if (progresso > 70) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 35000).toLocaleString()}] Descompactação concluída. Iniciando conversão para Parquet\n`;
-            if (progresso > 80) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 45000).toLocaleString()}] Conversão em andamento: ${Math.min((progresso - 70) * 3, 100).toFixed(1)}%\n`;
-            if (progresso > 90) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 55000).toLocaleString()}] Finalizando processamento completo\n`;
+            if (progresso > 35) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 18000).toLocaleString()}] Descompactando CAGEDMOV_{{ processamento.ano }}{{ '%02d'|format(processamento.mes|default(1)) }}.7z\n`;
+            if (progresso > 45) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 22000).toLocaleString()}] Extraído: CAGEDMOV{{ processamento.ano }}{{ '%02d'|format(processamento.mes|default(1)) }}.txt\n`;
+            if (progresso > 50) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 25000).toLocaleString()}] Descompactando CAGEDFOR_{{ processamento.ano }}{{ '%02d'|format(processamento.mes|default(1)) }}.7z\n`;
+            if (progresso > 60) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 28000).toLocaleString()}] Extraído: CAGEDFOR{{ processamento.ano }}{{ '%02d'|format(processamento.mes|default(1)) }}.txt\n`;
+            if (progresso > 65) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 30000).toLocaleString()}] Descompactação concluída\n`;
+            if (progresso > 70) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 35000).toLocaleString()}] Iniciando conversão para Parquet\n`;
+            if (progresso > 75) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 38000).toLocaleString()}] Processando CAGEDMOV{{ processamento.ano }}{{ '%02d'|format(processamento.mes|default(1)) }}.txt\n`;
+            if (progresso > 80) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 42000).toLocaleString()}] Processando CAGEDFOR{{ processamento.ano }}{{ '%02d'|format(processamento.mes|default(1)) }}.txt\n`;
+            if (progresso > 85) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 45000).toLocaleString()}] Consolidando dados\n`;
+            if (progresso > 90) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 50000).toLocaleString()}] Criando arquivo Parquet final\n`;
+            if (progresso > 95) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 55000).toLocaleString()}] Validando resultado final\n`;
         }
         
         // Logs de conclusão ou erro
         if (status === 'concluido' && progresso >= 100) {
-            logs += `[${formatarData('{{ processamento.data_fim|default("") }}')}] Processamento concluído com sucesso!\n`;
+            logs += `[${formatarData('{{ processamento.data_fim|default("") }}')}] ✅ Processamento concluído com sucesso!\n`;
         } else if (status === 'erro') {
-            logs += `[${formatarData('{{ processamento.data_fim|default("") }}')}] ERRO: {{ processamento.mensagem|default("Ocorreu um erro durante o processamento") }}\n`;
+            logs += `[${formatarData('{{ processamento.data_fim|default("") }}')}] ❌ ERRO: {{ processamento.mensagem|default("Ocorreu um erro durante o processamento") }}\n`;
         }
         
-        document.getElementById('log-content').textContent = logs;
+        // Atualizar logs com scroll automático para o final
+        const logElement = document.getElementById('log-content');
+        logElement.textContent = logs;
+        logElement.scrollTop = logElement.scrollHeight;
     }
     
     // Função para simular arquivos processados
@@ -357,17 +579,65 @@
         tabela.innerHTML = '';
         
         // Número de arquivos a serem exibidos com base no progresso
-        const totalArquivos = mes ? 1 : 12;
-        const arquivosProcessados = Math.ceil((progresso / 100) * totalArquivos);
+        let totalArquivos, arquivosProcessados;
         
-        for (let i = 1; i <= totalArquivos; i++) {
-            const mesAtual = mes || i;
-            const nomeArquivo = `CAGEDMOV_${ano}${mesAtual.toString().padStart(2, '0')}.7z`;
+        if (tipoProcessamento === 'completo') {
+            // Para processamento completo, mostrar 3 arquivos: 2 baixados + 1 parquet final
+            totalArquivos = 3;
+            if (progresso < 30) {
+                arquivosProcessados = 0;
+            } else if (progresso < 65) {
+                arquivosProcessados = 1;
+            } else if (progresso < 90) {
+                arquivosProcessados = 2;
+            } else {
+                arquivosProcessados = 3;
+            }
+        } else {
+            totalArquivos = mes ? 2 : 24; // 2 arquivos por mês (MOV e FOR)
+            arquivosProcessados = Math.ceil((progresso / 100) * totalArquivos);
+        }
+        
+        // Gerar lista de arquivos baseada no tipo de processamento
+        const arquivos = [];
+        
+        if (tipoProcessamento === 'completo') {
+            // Para processamento completo, mostrar os 3 arquivos principais
+            const mesStr = mes ? mes.toString().padStart(2, '0') : '01';
+            arquivos.push(`CAGEDMOV_${ano}${mesStr}.7z`);
+            arquivos.push(`CAGEDFOR_${ano}${mesStr}.7z`);
+            arquivos.push(`CAGED_${ano}_${mes ? mesStr : 'ANUAL'}.parquet`);
+        } else if (mes) {
+            // Processamento mensal - 2 arquivos
+            if (tipoProcessamento === 'baixar') {
+                arquivos.push(`CAGEDMOV_${ano}${mes.toString().padStart(2, '0')}.7z`);
+                arquivos.push(`CAGEDFOR_${ano}${mes.toString().padStart(2, '0')}.7z`);
+            } else {
+                // Para descompactar e converter, mostrar arquivos .txt
+                arquivos.push(`CAGEDMOV${ano}${mes.toString().padStart(2, '0')}.txt`);
+                arquivos.push(`CAGEDFOR${ano}${mes.toString().padStart(2, '0')}.txt`);
+            }
+        } else {
+            // Processamento anual - 24 arquivos (12 meses x 2 tipos)
+            for (let m = 1; m <= 12; m++) {
+                if (tipoProcessamento === 'baixar') {
+                    arquivos.push(`CAGEDMOV_${ano}${m.toString().padStart(2, '0')}.7z`);
+                    arquivos.push(`CAGEDFOR_${ano}${m.toString().padStart(2, '0')}.7z`);
+                } else {
+                    // Para descompactar e converter, mostrar arquivos .txt
+                    arquivos.push(`CAGEDMOV${ano}${m.toString().padStart(2, '0')}.txt`);
+                    arquivos.push(`CAGEDFOR${ano}${m.toString().padStart(2, '0')}.txt`);
+                }
+            }
+        }
+        
+        for (let i = 0; i < arquivos.length; i++) {
+            const nomeArquivo = arquivos[i];
             const tr = document.createElement('tr');
             
             // Definir status do arquivo
             let status, statusHtml, tempoProcessamento;
-            if (i <= arquivosProcessados) {
+            if (i < arquivosProcessados) {
                 if (tipoProcessamento === 'baixar') {
                     status = 'Baixado';
                     statusHtml = '<span class="badge bg-success">Baixado</span>';
@@ -382,7 +652,7 @@
                     statusHtml = '<span class="badge bg-success">Processado</span>';
                 }
                 tempoProcessamento = Math.floor(Math.random() * 60) + 30 + 's';
-            } else if (i === arquivosProcessados + 1 && progresso > 0) {
+            } else if (i === arquivosProcessados && progresso > 0) {
                 status = 'Em Andamento';
                 statusHtml = '<span class="badge bg-warning text-dark">Em Andamento</span>';
                 tempoProcessamento = 'Em andamento';
@@ -392,8 +662,19 @@
                 tempoProcessamento = '-';
             }
             
-            // Tamanho aleatório para o arquivo
-            const tamanho = (Math.random() * 10 + 5).toFixed(2) + ' MB';
+            // Tamanho baseado no tipo de arquivo
+            let tamanho;
+            if (nomeArquivo.includes('.7z')) {
+                tamanho = (Math.random() * 10 + 5).toFixed(2) + ' MB';
+            } else if (nomeArquivo.includes('.txt')) {
+                // Arquivos .txt são maiores
+                tamanho = (Math.random() * 50 + 100).toFixed(2) + ' MB';
+            } else if (nomeArquivo.includes('.parquet')) {
+                // Arquivos .parquet são menores que .txt mas maiores que .7z
+                tamanho = (Math.random() * 30 + 20).toFixed(2) + ' MB';
+            } else {
+                tamanho = (Math.random() * 10 + 5).toFixed(2) + ' MB';
+            }
             
             tr.innerHTML = `
                 <td>${nomeArquivo}</td>
@@ -411,10 +692,12 @@
         const tipoProcessamento = '{{ processamento.tipo }}';
         const status = '{{ processamento.status }}';
         const progresso = {{ processamento.progresso }};
+        const ano = {{ processamento.ano }};
+        const mes = {{ processamento.mes or 'null' }};
         
         // Calcular métricas simuladas
         const tempoTotal = document.getElementById('duracao').textContent;
-        const arquivosProcessados = Math.ceil((progresso / 100) * ({{ processamento.mes or 'null' }} ? 1 : 12));
+        const arquivosProcessados = Math.ceil((progresso / 100) * (mes ? 2 : 24));
         const tamanhoTotal = (arquivosProcessados * (Math.random() * 10 + 5)).toFixed(2) + ' MB';
         const velocidadeMedia = (Math.random() * 2 + 0.5).toFixed(2) + ' MB/s';
         
@@ -424,47 +707,87 @@
         document.getElementById('tamanho-total').textContent = tamanhoTotal;
         document.getElementById('velocidade-media').textContent = velocidadeMedia;
         
-        // Criar dados para o gráfico
+        // Criar dados para o gráfico com múltiplas linhas
         const ctx = document.getElementById('grafico-desempenho').getContext('2d');
         
         // Dados simulados para o gráfico
         const labels = [];
-        const data = [];
+        const dataTotal = [];
+        const dataCAGEDMOV = [];
+        const dataCAGEDFOR = [];
         
         // Gerar dados com base no progresso
         const numPontos = Math.max(5, Math.ceil(progresso / 10));
         for (let i = 0; i < numPontos; i++) {
-            const percentual = (i / (numPontos - 1)) * 100;
+            const percentual = (i / (numPontos - 1)) * progresso;
             labels.push(percentual.toFixed(0) + '%');
             
-            // Velocidade simulada (MB/s) com alguma variação
-            const velocidade = Math.random() * 2 + 0.5;
-            data.push(velocidade);
+            // Velocidades simuladas (MB/s) com alguma variação
+            const velocidadeTotal = Math.random() * 2 + 1.5;
+            const velocidadeMOV = Math.random() * 1.5 + 0.8;
+            const velocidadeFOR = Math.random() * 1.2 + 0.6;
+            
+            dataTotal.push(velocidadeTotal);
+            dataCAGEDMOV.push(velocidadeMOV);
+            dataCAGEDFOR.push(velocidadeFOR);
         }
+        
+        // Datasets para o gráfico
+        const datasets = [
+            {
+                label: 'Desempenho Total',
+                data: dataTotal,
+                borderColor: '#0d6efd',
+                backgroundColor: 'rgba(13, 110, 253, 0.1)',
+                borderWidth: 3,
+                fill: false,
+                tension: 0.4
+            },
+            {
+                label: 'CAGEDMOV',
+                data: dataCAGEDMOV,
+                borderColor: '#20c997',
+                backgroundColor: 'rgba(32, 201, 151, 0.1)',
+                borderWidth: 2,
+                fill: false,
+                tension: 0.4
+            },
+            {
+                label: 'CAGEDFOR',
+                data: dataCAGEDFOR,
+                borderColor: '#6610f2',
+                backgroundColor: 'rgba(102, 16, 242, 0.1)',
+                borderWidth: 2,
+                fill: false,
+                tension: 0.4
+            }
+        ];
         
         // Criar ou atualizar gráfico
         if (window.graficoDesempenho) {
             window.graficoDesempenho.data.labels = labels;
-            window.graficoDesempenho.data.datasets[0].data = data;
+            window.graficoDesempenho.data.datasets = datasets;
             window.graficoDesempenho.update();
         } else {
             window.graficoDesempenho = new Chart(ctx, {
                 type: 'line',
                 data: {
                     labels: labels,
-                    datasets: [{
-                        label: 'Velocidade (MB/s)',
-                        data: data,
-                        borderColor: '#0d6efd',
-                        backgroundColor: 'rgba(13, 110, 253, 0.1)',
-                        borderWidth: 2,
-                        fill: true,
-                        tension: 0.4
-                    }]
+                    datasets: datasets
                 },
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            display: true,
+                            position: 'top'
+                        },
+                        title: {
+                            display: true,
+                            text: 'Desempenho por Arquivo'
+                        }
+                    },
                     scales: {
                         y: {
                             beginAtZero: true,
@@ -479,6 +802,10 @@
                                 text: 'Progresso'
                             }
                         }
+                    },
+                    interaction: {
+                        intersect: false,
+                        mode: 'index'
                     }
                 }
             });
@@ -488,7 +815,7 @@
     // Carregar dados iniciais
     document.addEventListener('DOMContentLoaded', function() {
         carregarDados();
-        simularLogs();
+        atualizarLogs();
         
         // Configurar eventos para as abas
         document.getElementById('arquivos-tab').addEventListener('click', function() {
