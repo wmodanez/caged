@@ -5,11 +5,13 @@ Script principal para download, processamento e consolidação de dados mensais
 """
 
 import click
+import threading
 from pathlib import Path
 from loguru import logger
 from src.util.gerenciador_ftp import GerenciadorArquivosCaged
 from src.util.conversor_parquet import ConversorParquetCaged
 from src.util.descompactador import DescompactadorCaged
+from src.web.integrador import executar_dashboard
 
 
 # Configuração de logging
@@ -495,6 +497,43 @@ def completo(ano, mes, consolidacao_anual, campos):
 
 
 @cli.command()
+@click.option('--host', default='127.0.0.1', help='Host para o servidor web')
+@click.option('--port', default=5000, type=int, help='Porta para o servidor web')
+@click.option('--debug', is_flag=True, help='Executar em modo debug')
+def dashboard(host, port, debug):
+    """
+    🌐 Inicia o dashboard web para monitoramento do processamento CAGED
+    
+    Exemplos:
+    \b
+    # Iniciar dashboard na porta padrão (5000)
+    python main.py dashboard
+    
+    # Iniciar dashboard em uma porta específica
+    python main.py dashboard --port 8080
+    
+    # Iniciar dashboard acessível externamente
+    python main.py dashboard --host 0.0.0.0
+    """
+    logger.info(f"Iniciando dashboard web - Host: {host}, Porta: {port}, Debug: {debug}")
+    
+    try:
+        click.echo(f"🌐 Iniciando dashboard web em http://{host}:{port}")
+        click.echo("ℹ️ Pressione CTRL+C para encerrar")
+        
+        # Criar diretórios necessários se não existirem
+        Path("src/web/templates").mkdir(parents=True, exist_ok=True)
+        Path("src/web/static").mkdir(parents=True, exist_ok=True)
+        
+        # Iniciar o dashboard
+        executar_dashboard(host=host, port=port, debug=debug)
+        
+    except Exception as e:
+        logger.error(f"Erro ao iniciar dashboard: {e}")
+        click.echo(f"❌ Erro ao iniciar dashboard: {e}")
+
+
+@cli.command()
 def status():
     """
     📈 Exibe status do projeto e arquivos processados
@@ -537,9 +576,37 @@ def status():
         click.echo(f"❌ Erro ao exibir status: {e}")
 
 
+@cli.command()
+def corrigir_processamentos():
+    """
+    🔧 Corrige processamentos que ficaram com status 'em_andamento'
+    
+    Este comando atualiza o status de processamentos que ficaram pendentes
+    devido ao encerramento abrupto do servidor para 'erro'.
+    
+    Exemplos:
+    \b
+    # Corrigir processamentos pendentes
+    python main.py corrigir_processamentos
+    """
+    click.echo("🔧 Corrigindo processamentos pendentes...")
+    
+    try:
+        # Importar função de correção
+        from corrigir_processamentos import corrigir_processamentos_pendentes
+        
+        # Executar correção
+        corrigir_processamentos_pendentes()
+        
+        click.echo("✅ Processamentos corrigidos com sucesso!")
+    except Exception as e:
+        logger.error(f"Erro ao corrigir processamentos: {e}")
+        click.echo(f"❌ Erro ao corrigir processamentos: {e}")
+
+
 if __name__ == '__main__':
     # Criar diretórios necessários se não existirem
     for dir_name in ['files-zip', 'files-unzip', 'parquet', 'logs']:
         Path(dir_name).mkdir(exist_ok=True)
     
-    cli() 
+    cli()

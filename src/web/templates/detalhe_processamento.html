@@ -1,0 +1,526 @@
+{% extends 'base.html' %}
+
+{% block title %}CAGED Dashboard - Detalhes do Processamento{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-3 pb-2 mb-3 border-bottom">
+    <h1 class="h2">Detalhes do Processamento #{{ processamento.id }}</h1>
+    <div class="btn-toolbar mb-2 mb-md-0">
+        <div class="btn-group me-2">
+            <a href="/processamentos" class="btn btn-sm btn-outline-secondary">
+                <i class="bi bi-arrow-left"></i> Voltar para Lista
+            </a>
+        </div>
+    </div>
+</div>
+
+<!-- Informações gerais -->
+<div class="row mb-4">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Informações Gerais</h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <p><strong>ID:</strong> {{ processamento.id }}</p>
+                        <p>
+                            <strong>Tipo:</strong> 
+                            {% if processamento.tipo == 'baixar' %}
+                                Download
+                            {% elif processamento.tipo == 'descompactar' %}
+                                Descompactação
+                            {% elif processamento.tipo == 'converter' %}
+                                Conversão
+                            {% elif processamento.tipo == 'consolidar' %}
+                                Consolidação
+                            {% elif processamento.tipo == 'completo' %}
+                                Processamento Completo
+                            {% else %}
+                                {{ processamento.tipo }}
+                            {% endif %}
+                        </p>
+                        <p>
+                            <strong>Período:</strong> 
+                            {{ processamento.ano }}
+                            {% if processamento.mes %}
+                                / {{ ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'][processamento.mes-1] }}
+                            {% endif %}
+                        </p>
+                        <p>
+                            <strong>Status:</strong> 
+                            {% if processamento.status == 'em_andamento' %}
+                                <span class="badge bg-warning text-dark">Em Andamento</span>
+                            {% elif processamento.status == 'concluido' %}
+                                <span class="badge bg-success">Concluído</span>
+                            {% elif processamento.status == 'erro' %}
+                                <span class="badge bg-danger">Erro</span>
+                            {% else %}
+                                {{ processamento.status }}
+                            {% endif %}
+                        </p>
+                    </div>
+                    <div class="col-md-6">
+                        <p><strong>Início:</strong> <span id="data-inicio">{{ processamento.data_inicio.strftime('%d/%m/%Y %H:%M:%S') if processamento.data_inicio else '-' }}</span></p>
+                        <p><strong>Fim:</strong> <span id="data-fim">{{ processamento.data_fim.strftime('%d/%m/%Y %H:%M:%S') if processamento.data_fim else '-' }}</span></p>
+                        <p><strong>Duração:</strong> <span id="duracao">-</span></p>
+                        <p><strong>Mensagem:</strong> <span id="mensagem">{{ processamento.mensagem or '-' }}</span></p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Progresso</h5>
+            </div>
+            <div class="card-body text-center">
+                <div class="progress-circle">
+                    <div class="progress-circle-inner">
+                        <span id="progress-value">{{ processamento.progresso|round|int }}%</span>
+                    </div>
+                </div>
+                
+                <div class="mt-4">
+                    <div class="progress" style="height: 20px;">
+                        <div class="progress-bar {% if processamento.status == 'erro' %}bg-danger{% endif %}" role="progressbar" style="width: {{ processamento.progresso }}%" aria-valuenow="{{ processamento.progresso }}" aria-valuemin="0" aria-valuemax="100"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Abas de detalhes -->
+<div class="card">
+    <div class="card-header">
+        <ul class="nav nav-tabs card-header-tabs" id="detalhesTab" role="tablist">
+            <li class="nav-item" role="presentation">
+                <button class="nav-link active" id="logs-tab" data-bs-toggle="tab" data-bs-target="#logs" type="button" role="tab" aria-controls="logs" aria-selected="true">Logs</button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="arquivos-tab" data-bs-toggle="tab" data-bs-target="#arquivos" type="button" role="tab" aria-controls="arquivos" aria-selected="false">Arquivos Processados</button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="desempenho-tab" data-bs-toggle="tab" data-bs-target="#desempenho" type="button" role="tab" aria-controls="desempenho" aria-selected="false">Desempenho</button>
+            </li>
+        </ul>
+    </div>
+    <div class="card-body">
+        <div class="tab-content" id="detalhesTabContent">
+            <!-- Aba de Logs -->
+            <div class="tab-pane fade show active" id="logs" role="tabpanel" aria-labelledby="logs-tab">
+                <div class="bg-dark text-light p-3 rounded" style="height: 300px; overflow-y: auto;">
+                    <pre id="log-content">Carregando logs...</pre>
+                </div>
+            </div>
+            
+            <!-- Aba de Arquivos Processados -->
+            <div class="tab-pane fade" id="arquivos" role="tabpanel" aria-labelledby="arquivos-tab">
+                <div class="table-responsive">
+                    <table class="table table-hover">
+                        <thead>
+                            <tr>
+                                <th>Nome do Arquivo</th>
+                                <th>Tamanho</th>
+                                <th>Status</th>
+                                <th>Tempo de Processamento</th>
+                            </tr>
+                        </thead>
+                        <tbody id="tabela-arquivos">
+                            <!-- Dados serão carregados via JavaScript -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            
+            <!-- Aba de Desempenho -->
+            <div class="tab-pane fade" id="desempenho" role="tabpanel" aria-labelledby="desempenho-tab">
+                <div class="row">
+                    <div class="col-md-6">
+                        <div class="chart-container">
+                            <canvas id="grafico-desempenho"></canvas>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="table-responsive">
+                            <table class="table table-sm">
+                                <thead>
+                                    <tr>
+                                        <th>Métrica</th>
+                                        <th>Valor</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <td>Tempo Total</td>
+                                        <td id="tempo-total">-</td>
+                                    </tr>
+                                    <tr>
+                                        <td>Arquivos Processados</td>
+                                        <td id="arquivos-processados">-</td>
+                                    </tr>
+                                    <tr>
+                                        <td>Tamanho Total</td>
+                                        <td id="tamanho-total">-</td>
+                                    </tr>
+                                    <tr>
+                                        <td>Velocidade Média</td>
+                                        <td id="velocidade-media">-</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // ID do processamento
+    const processamentoId = {{ processamento.id }};
+    
+    // Função para carregar dados do processamento
+    function carregarDados() {
+        fetch(`/api/processamento/${processamentoId}`)
+            .then(response => response.json())
+            .then(data => {
+                atualizarInformacoes(data);
+                
+                // Se o processamento ainda estiver em andamento, atualizar a cada 2 segundos
+                if (data.status === 'em_andamento') {
+                    setTimeout(carregarDados, 2000);
+                }
+            })
+            .catch(error => console.error('Erro ao carregar dados:', error));
+    }
+    
+    // Função para atualizar informações do processamento
+    function atualizarInformacoes(processamento) {
+        // Atualizar status
+        let statusHtml = '';
+        if (processamento.status === 'em_andamento') {
+            statusHtml = '<span class="badge bg-warning text-dark">Em Andamento</span>';
+        } else if (processamento.status === 'concluido') {
+            statusHtml = '<span class="badge bg-success">Concluído</span>';
+        } else if (processamento.status === 'erro') {
+            statusHtml = '<span class="badge bg-danger">Erro</span>';
+        } else {
+            statusHtml = processamento.status;
+        }
+        
+        // Encontrar o elemento de status usando um loop em vez do seletor :contains
+        document.querySelectorAll('p strong').forEach(function(el) {
+            if (el.textContent.trim() === 'Status:') {
+                // Atualizar o próximo elemento após o strong
+                if (el.nextElementSibling && el.nextElementSibling.classList.contains('badge')) {
+                    el.nextElementSibling.outerHTML = statusHtml;
+                } else if (el.nextSibling) {
+                    // Se não for um elemento, pode ser um nó de texto
+                    const span = document.createElement('span');
+                    span.innerHTML = statusHtml;
+                    el.parentNode.insertBefore(span, el.nextSibling);
+                }
+            }
+        });
+        
+        // Atualizar progresso
+        document.getElementById('progress-value').textContent = Math.round(processamento.progresso) + '%';
+        const progressBar = document.querySelector('.progress-bar');
+        progressBar.style.width = processamento.progresso + '%';
+        progressBar.setAttribute('aria-valuenow', processamento.progresso);
+        
+        // Atualizar mensagem
+        document.getElementById('mensagem').textContent = processamento.mensagem || '-';
+        
+        // Atualizar datas
+        document.getElementById('data-inicio').textContent = formatarData(processamento.data_inicio);
+        document.getElementById('data-fim').textContent = formatarData(processamento.data_fim);
+        
+        // Calcular duração
+        calcularDuracao(processamento.data_inicio, processamento.data_fim, processamento.status);
+        
+        // Atualizar classe da barra de progresso se for erro
+        if (processamento.status === 'erro') {
+            progressBar.classList.add('bg-danger');
+        } else {
+            progressBar.classList.remove('bg-danger');
+        }
+    }
+    
+    // Função para calcular duração
+    function calcularDuracao(dataInicio, dataFim, status) {
+        if (!dataInicio) {
+            document.getElementById('duracao').textContent = '-';
+            return;
+        }
+        
+        const inicio = new Date(dataInicio);
+        const fim = dataFim ? new Date(dataFim) : new Date();
+        const diff = Math.abs(fim - inicio) / 1000; // em segundos
+        
+        let duracao = '';
+        const horas = Math.floor(diff / 3600);
+        const minutos = Math.floor((diff % 3600) / 60);
+        const segundos = Math.floor(diff % 60);
+        
+        if (horas > 0) {
+            duracao += horas + 'h ';
+        }
+        if (minutos > 0 || horas > 0) {
+            duracao += minutos + 'm ';
+        }
+        duracao += segundos + 's';
+        
+        if (status === 'em_andamento') {
+            duracao += ' (em andamento)';
+        }
+        
+        document.getElementById('duracao').textContent = duracao;
+    }
+    
+    // Função para formatar data
+    function formatarData(dataString) {
+        if (!dataString) return '-';
+        const data = new Date(dataString);
+        return data.toLocaleDateString('pt-BR') + ' ' + data.toLocaleTimeString('pt-BR');
+    }
+    
+    // Função para simular logs
+    function simularLogs() {
+        const tipoProcessamento = '{{ processamento.tipo }}';
+        const status = '{{ processamento.status }}';
+        const progresso = {{ processamento.progresso }};
+        
+        let logs = '';
+        
+        // Logs de início
+        logs += `[${formatarData('{{ processamento.data_inicio|default("") }}')}] Iniciando processamento #${processamentoId} (${tipoProcessamento})\n`;
+        logs += `[${formatarData('{{ processamento.data_inicio|default("") }}')}] Configurando parâmetros para ano {{ processamento.ano }}{% if processamento.mes %}, mês {{ processamento.mes }}{% endif %}\n`;
+        
+        // Logs de progresso
+        if (tipoProcessamento === 'baixar') {
+            logs += `[${formatarData('{{ processamento.data_inicio|default("") }}')}] Conectando ao servidor FTP do CAGED\n`;
+            logs += `[${formatarData('{{ processamento.data_inicio|default("") }}')}] Listando arquivos disponíveis\n`;
+            if (progresso > 10) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 5000).toLocaleString()}] Iniciando download dos arquivos\n`;
+            if (progresso > 30) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 15000).toLocaleString()}] Download em andamento: ${Math.min(progresso, 100).toFixed(1)}%\n`;
+            if (progresso > 60) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 30000).toLocaleString()}] Download em andamento: ${Math.min(progresso, 100).toFixed(1)}%\n`;
+            if (progresso > 90) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 45000).toLocaleString()}] Finalizando downloads\n`;
+        } else if (tipoProcessamento === 'descompactar') {
+            logs += `[${formatarData('{{ processamento.data_inicio|default("") }}')}] Verificando arquivos compactados disponíveis\n`;
+            if (progresso > 10) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 5000).toLocaleString()}] Iniciando descompactação\n`;
+            if (progresso > 30) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 15000).toLocaleString()}] Descompactação em andamento: ${Math.min(progresso, 100).toFixed(1)}%\n`;
+            if (progresso > 60) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 30000).toLocaleString()}] Descompactação em andamento: ${Math.min(progresso, 100).toFixed(1)}%\n`;
+            if (progresso > 90) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 45000).toLocaleString()}] Finalizando descompactação\n`;
+        } else if (tipoProcessamento === 'converter') {
+            logs += `[${formatarData('{{ processamento.data_inicio|default("") }}')}] Verificando arquivos descompactados disponíveis\n`;
+            if (progresso > 10) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 5000).toLocaleString()}] Iniciando conversão para Parquet\n`;
+            if (progresso > 30) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 15000).toLocaleString()}] Conversão em andamento: ${Math.min(progresso, 100).toFixed(1)}%\n`;
+            if (progresso > 60) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 30000).toLocaleString()}] Conversão em andamento: ${Math.min(progresso, 100).toFixed(1)}%\n`;
+            if (progresso > 90) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 45000).toLocaleString()}] Finalizando conversão\n`;
+        } else if (tipoProcessamento === 'completo') {
+            logs += `[${formatarData('{{ processamento.data_inicio|default("") }}')}] Iniciando processamento completo\n`;
+            if (progresso > 5) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 2000).toLocaleString()}] Conectando ao servidor FTP do CAGED\n`;
+            if (progresso > 10) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 5000).toLocaleString()}] Iniciando download dos arquivos\n`;
+            if (progresso > 30) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 15000).toLocaleString()}] Download concluído. Iniciando descompactação\n`;
+            if (progresso > 50) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 25000).toLocaleString()}] Descompactação em andamento: ${Math.min((progresso - 30) * 1.5, 100).toFixed(1)}%\n`;
+            if (progresso > 70) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 35000).toLocaleString()}] Descompactação concluída. Iniciando conversão para Parquet\n`;
+            if (progresso > 80) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 45000).toLocaleString()}] Conversão em andamento: ${Math.min((progresso - 70) * 3, 100).toFixed(1)}%\n`;
+            if (progresso > 90) logs += `[${new Date(new Date('{{ processamento.data_inicio|default("") }}').getTime() + 55000).toLocaleString()}] Finalizando processamento completo\n`;
+        }
+        
+        // Logs de conclusão ou erro
+        if (status === 'concluido' && progresso >= 100) {
+            logs += `[${formatarData('{{ processamento.data_fim|default("") }}')}] Processamento concluído com sucesso!\n`;
+        } else if (status === 'erro') {
+            logs += `[${formatarData('{{ processamento.data_fim|default("") }}')}] ERRO: {{ processamento.mensagem|default("Ocorreu um erro durante o processamento") }}\n`;
+        }
+        
+        document.getElementById('log-content').textContent = logs;
+    }
+    
+    // Função para simular arquivos processados
+    function simularArquivosProcessados() {
+        const tipoProcessamento = '{{ processamento.tipo }}';
+        const ano = {{ processamento.ano }};
+        const mes = {{ processamento.mes or 'null' }};
+        const progresso = {{ processamento.progresso }};
+        
+        const tabela = document.getElementById('tabela-arquivos');
+        tabela.innerHTML = '';
+        
+        // Número de arquivos a serem exibidos com base no progresso
+        const totalArquivos = mes ? 1 : 12;
+        const arquivosProcessados = Math.ceil((progresso / 100) * totalArquivos);
+        
+        for (let i = 1; i <= totalArquivos; i++) {
+            const mesAtual = mes || i;
+            const nomeArquivo = `CAGEDMOV_${ano}${mesAtual.toString().padStart(2, '0')}.7z`;
+            const tr = document.createElement('tr');
+            
+            // Definir status do arquivo
+            let status, statusHtml, tempoProcessamento;
+            if (i <= arquivosProcessados) {
+                if (tipoProcessamento === 'baixar') {
+                    status = 'Baixado';
+                    statusHtml = '<span class="badge bg-success">Baixado</span>';
+                } else if (tipoProcessamento === 'descompactar') {
+                    status = 'Descompactado';
+                    statusHtml = '<span class="badge bg-success">Descompactado</span>';
+                } else if (tipoProcessamento === 'converter') {
+                    status = 'Convertido';
+                    statusHtml = '<span class="badge bg-success">Convertido</span>';
+                } else if (tipoProcessamento === 'completo') {
+                    status = 'Processado';
+                    statusHtml = '<span class="badge bg-success">Processado</span>';
+                }
+                tempoProcessamento = Math.floor(Math.random() * 60) + 30 + 's';
+            } else if (i === arquivosProcessados + 1 && progresso > 0) {
+                status = 'Em Andamento';
+                statusHtml = '<span class="badge bg-warning text-dark">Em Andamento</span>';
+                tempoProcessamento = 'Em andamento';
+            } else {
+                status = 'Pendente';
+                statusHtml = '<span class="badge bg-secondary">Pendente</span>';
+                tempoProcessamento = '-';
+            }
+            
+            // Tamanho aleatório para o arquivo
+            const tamanho = (Math.random() * 10 + 5).toFixed(2) + ' MB';
+            
+            tr.innerHTML = `
+                <td>${nomeArquivo}</td>
+                <td>${tamanho}</td>
+                <td>${statusHtml}</td>
+                <td>${tempoProcessamento}</td>
+            `;
+            
+            tabela.appendChild(tr);
+        }
+    }
+    
+    // Função para simular dados de desempenho
+    function simularDadosDesempenho() {
+        const tipoProcessamento = '{{ processamento.tipo }}';
+        const status = '{{ processamento.status }}';
+        const progresso = {{ processamento.progresso }};
+        
+        // Calcular métricas simuladas
+        const tempoTotal = document.getElementById('duracao').textContent;
+        const arquivosProcessados = Math.ceil((progresso / 100) * ({{ processamento.mes or 'null' }} ? 1 : 12));
+        const tamanhoTotal = (arquivosProcessados * (Math.random() * 10 + 5)).toFixed(2) + ' MB';
+        const velocidadeMedia = (Math.random() * 2 + 0.5).toFixed(2) + ' MB/s';
+        
+        // Atualizar métricas na tabela
+        document.getElementById('tempo-total').textContent = tempoTotal;
+        document.getElementById('arquivos-processados').textContent = arquivosProcessados;
+        document.getElementById('tamanho-total').textContent = tamanhoTotal;
+        document.getElementById('velocidade-media').textContent = velocidadeMedia;
+        
+        // Criar dados para o gráfico
+        const ctx = document.getElementById('grafico-desempenho').getContext('2d');
+        
+        // Dados simulados para o gráfico
+        const labels = [];
+        const data = [];
+        
+        // Gerar dados com base no progresso
+        const numPontos = Math.max(5, Math.ceil(progresso / 10));
+        for (let i = 0; i < numPontos; i++) {
+            const percentual = (i / (numPontos - 1)) * 100;
+            labels.push(percentual.toFixed(0) + '%');
+            
+            // Velocidade simulada (MB/s) com alguma variação
+            const velocidade = Math.random() * 2 + 0.5;
+            data.push(velocidade);
+        }
+        
+        // Criar ou atualizar gráfico
+        if (window.graficoDesempenho) {
+            window.graficoDesempenho.data.labels = labels;
+            window.graficoDesempenho.data.datasets[0].data = data;
+            window.graficoDesempenho.update();
+        } else {
+            window.graficoDesempenho = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Velocidade (MB/s)',
+                        data: data,
+                        borderColor: '#0d6efd',
+                        backgroundColor: 'rgba(13, 110, 253, 0.1)',
+                        borderWidth: 2,
+                        fill: true,
+                        tension: 0.4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            title: {
+                                display: true,
+                                text: 'Velocidade (MB/s)'
+                            }
+                        },
+                        x: {
+                            title: {
+                                display: true,
+                                text: 'Progresso'
+                            }
+                        }
+                    }
+                }
+            });
+        }
+    }
+    
+    // Carregar dados iniciais
+    document.addEventListener('DOMContentLoaded', function() {
+        carregarDados();
+        simularLogs();
+        
+        // Configurar eventos para as abas
+        document.getElementById('arquivos-tab').addEventListener('click', function() {
+            simularArquivosProcessados();
+        });
+        
+        document.getElementById('desempenho-tab').addEventListener('click', function() {
+            simularDadosDesempenho();
+        });
+        
+        // Atualizar status se necessário
+        document.querySelectorAll('p strong').forEach(function(el) {
+            if (el.textContent.trim() === 'Status:') {
+                // Procurar o span.badge que é irmão do elemento strong
+                let nextEl = el.nextElementSibling;
+                while (nextEl) {
+                    if (nextEl.classList && nextEl.classList.contains('badge')) {
+                        console.log('Status encontrado:', nextEl.textContent);
+                        break;
+                    }
+                    nextEl = nextEl.nextElementSibling;
+                }
+                
+                // Se não encontrou como irmão, procurar dentro do mesmo parágrafo
+                if (!nextEl) {
+                    const badge = el.parentNode.querySelector('span.badge');
+                    if (badge) {
+                        console.log('Status encontrado (via parentNode):', badge.textContent);
+                    }
+                }
+            }
+        });
+    });
+</script>
+{% endblock %}

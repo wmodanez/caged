@@ -1,0 +1,306 @@
+{% extends 'base.html' %}
+
+{% block title %}CAGED Dashboard - Monitoramento{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-3 pb-2 mb-3 border-bottom">
+    <h1 class="h2">Dashboard CAGED</h1>
+    <div class="btn-toolbar mb-2 mb-md-0">
+        <div class="btn-group me-2">
+            <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#novoProcessamentoModal">
+                <i class="bi bi-plus-circle"></i> Novo Processamento
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Cards de estatísticas -->
+<div class="row mb-4">
+    <div class="col-md-3">
+        <div class="card stats-card bg-primary text-white">
+            <div class="card-body">
+                <div class="stats-icon">
+                    <i class="bi bi-cloud-download"></i>
+                </div>
+                <div class="stats-value" id="total-downloads">0</div>
+                <div class="stats-label">Downloads</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card stats-card bg-success text-white">
+            <div class="card-body">
+                <div class="stats-icon">
+                    <i class="bi bi-arrow-repeat"></i>
+                </div>
+                <div class="stats-value" id="total-conversoes">0</div>
+                <div class="stats-label">Conversões</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card stats-card bg-warning text-dark">
+            <div class="card-body">
+                <div class="stats-icon">
+                    <i class="bi bi-hourglass-split"></i>
+                </div>
+                <div class="stats-value" id="total-em-andamento">0</div>
+                <div class="stats-label">Em Andamento</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card stats-card bg-danger text-white">
+            <div class="card-body">
+                <div class="stats-icon">
+                    <i class="bi bi-exclamation-triangle"></i>
+                </div>
+                <div class="stats-value" id="total-erros">0</div>
+                <div class="stats-label">Erros</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <!-- Tabela de processamentos recentes -->
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">Processamentos Recentes</h5>
+                <a href="/processamentos" class="btn btn-sm btn-outline-primary">Ver Todos</a>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-hover">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>Tipo</th>
+                                <th>Período</th>
+                                <th>Status</th>
+                                <th>Progresso</th>
+                                <th>Início</th>
+                                <th>Ações</th>
+                            </tr>
+                        </thead>
+                        <tbody id="tabela-processamentos">
+                            <!-- Dados serão carregados via JavaScript -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Gráficos -->
+    <div class="col-md-4">
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0">Processamentos por Tipo</h5>
+            </div>
+            <div class="card-body">
+                <div class="chart-container">
+                    <canvas id="grafico-tipos"></canvas>
+                </div>
+            </div>
+        </div>
+        
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Status dos Processamentos</h5>
+            </div>
+            <div class="card-body">
+                <div class="chart-container">
+                    <canvas id="grafico-status"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // Função para carregar dados dos processamentos
+    function carregarDados() {
+        fetch('/api/processamentos')
+            .then(response => response.json())
+            .then(data => {
+                atualizarEstatisticas(data);
+                atualizarTabelaProcessamentos(data);
+                atualizarGraficos(data);
+            })
+            .catch(error => console.error('Erro ao carregar dados:', error));
+    }
+    
+    // Função para atualizar estatísticas
+    function atualizarEstatisticas(processamentos) {
+        const downloads = processamentos.filter(p => p.tipo === 'baixar').length;
+        const conversoes = processamentos.filter(p => p.tipo === 'converter').length;
+        const emAndamento = processamentos.filter(p => p.status === 'em_andamento').length;
+        const erros = processamentos.filter(p => p.status === 'erro').length;
+        
+        document.getElementById('total-downloads').textContent = downloads;
+        document.getElementById('total-conversoes').textContent = conversoes;
+        document.getElementById('total-em-andamento').textContent = emAndamento;
+        document.getElementById('total-erros').textContent = erros;
+    }
+    
+    // Função para atualizar tabela de processamentos
+    function atualizarTabelaProcessamentos(processamentos) {
+        const tabela = document.getElementById('tabela-processamentos');
+        tabela.innerHTML = '';
+        
+        // Mostrar apenas os 5 processamentos mais recentes
+        const processamentosRecentes = processamentos.slice(0, 5);
+        
+        processamentosRecentes.forEach(p => {
+            const tr = document.createElement('tr');
+            
+            // Definir classe com base no status
+            if (p.status === 'em_andamento') {
+                tr.classList.add('table-warning');
+            } else if (p.status === 'erro') {
+                tr.classList.add('table-danger');
+            } else if (p.status === 'concluido') {
+                tr.classList.add('table-success');
+            }
+            
+            // Formatar período
+            let periodo = p.ano.toString();
+            if (p.mes) {
+                const meses = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+                periodo += '/' + meses[p.mes - 1];
+            }
+            
+            // Formatar tipo
+            const tiposFormatados = {
+                'baixar': 'Download',
+                'descompactar': 'Descompactação',
+                'converter': 'Conversão',
+                'consolidar': 'Consolidação',
+                'completo': 'Completo'
+            };
+            
+            // Formatar status
+            const statusFormatados = {
+                'em_andamento': '<span class="badge bg-warning text-dark">Em Andamento</span>',
+                'concluido': '<span class="badge bg-success">Concluído</span>',
+                'erro': '<span class="badge bg-danger">Erro</span>'
+            };
+            
+            tr.innerHTML = `
+                <td>${p.id}</td>
+                <td>${tiposFormatados[p.tipo] || p.tipo}</td>
+                <td>${periodo}</td>
+                <td>${statusFormatados[p.status] || p.status}</td>
+                <td>
+                    <div class="progress">
+                        <div class="progress-bar ${p.status === 'erro' ? 'bg-danger' : ''}" role="progressbar" style="width: ${p.progresso}%" aria-valuenow="${p.progresso}" aria-valuemin="0" aria-valuemax="100"></div>
+                    </div>
+                    <small>${p.progresso.toFixed(1)}%</small>
+                </td>
+                <td>${formatarData(p.data_inicio)}</td>
+                <td>
+                    <a href="/processamento/${p.id}" class="btn btn-sm btn-outline-primary">
+                        <i class="bi bi-eye"></i>
+                    </a>
+                </td>
+            `;
+            
+            tabela.appendChild(tr);
+        });
+    }
+    
+    // Função para atualizar gráficos
+    function atualizarGraficos(processamentos) {
+        // Gráfico de tipos
+        const tiposLabels = ['Download', 'Descompactação', 'Conversão', 'Consolidação', 'Completo'];
+        const tiposData = [
+            processamentos.filter(p => p.tipo === 'baixar').length,
+            processamentos.filter(p => p.tipo === 'descompactar').length,
+            processamentos.filter(p => p.tipo === 'converter').length,
+            processamentos.filter(p => p.tipo === 'consolidar').length,
+            processamentos.filter(p => p.tipo === 'completo').length
+        ];
+        
+        // Gráfico de status
+        const statusLabels = ['Em Andamento', 'Concluído', 'Erro'];
+        const statusData = [
+            processamentos.filter(p => p.status === 'em_andamento').length,
+            processamentos.filter(p => p.status === 'concluido').length,
+            processamentos.filter(p => p.status === 'erro').length
+        ];
+        
+        // Criar ou atualizar gráfico de tipos
+        if (window.graficoTipos) {
+            window.graficoTipos.data.datasets[0].data = tiposData;
+            window.graficoTipos.update();
+        } else {
+            const ctxTipos = document.getElementById('grafico-tipos').getContext('2d');
+            window.graficoTipos = new Chart(ctxTipos, {
+                type: 'doughnut',
+                data: {
+                    labels: tiposLabels,
+                    datasets: [{
+                        data: tiposData,
+                        backgroundColor: [
+                            '#0d6efd',
+                            '#6f42c1',
+                            '#20c997',
+                            '#fd7e14',
+                            '#0dcaf0'
+                        ]
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false
+                }
+            });
+        }
+        
+        // Criar ou atualizar gráfico de status
+        if (window.graficoStatus) {
+            window.graficoStatus.data.datasets[0].data = statusData;
+            window.graficoStatus.update();
+        } else {
+            const ctxStatus = document.getElementById('grafico-status').getContext('2d');
+            window.graficoStatus = new Chart(ctxStatus, {
+                type: 'pie',
+                data: {
+                    labels: statusLabels,
+                    datasets: [{
+                        data: statusData,
+                        backgroundColor: [
+                            '#ffc107',
+                            '#198754',
+                            '#dc3545'
+                        ]
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false
+                }
+            });
+        }
+    }
+    
+    // Função para formatar data
+    function formatarData(dataString) {
+        if (!dataString) return '';
+        const data = new Date(dataString);
+        return data.toLocaleDateString('pt-BR') + ' ' + data.toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit'});
+    }
+    
+    // Carregar dados iniciais
+    document.addEventListener('DOMContentLoaded', function() {
+        carregarDados();
+        
+        // Atualizar dados a cada 10 segundos
+        setInterval(carregarDados, 10000);
+    });
+</script>
+{% endblock %}

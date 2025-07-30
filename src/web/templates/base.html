@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}CAGED Dashboard{% endblock %}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
+    <link href="{{ url_for('static', filename='dashboard.css') }}" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">
+    {% block extra_css %}{% endblock %}
+</head>
+<body>
+    <header class="navbar navbar-dark sticky-top bg-dark flex-md-nowrap p-0 shadow">
+        <a class="navbar-brand col-md-3 col-lg-2 me-0 px-3" href="/">CAGED Dashboard</a>
+        <button class="navbar-toggler position-absolute d-md-none collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#sidebarMenu" aria-controls="sidebarMenu" aria-expanded="false" aria-label="Toggle navigation">
+            <span class="navbar-toggler-icon"></span>
+        </button>
+    </header>
+
+    <div class="container-fluid">
+        <div class="row">
+            <nav id="sidebarMenu" class="col-md-3 col-lg-2 d-md-block sidebar collapse">
+                <div class="sidebar-sticky pt-3">
+                    <ul class="nav flex-column">
+                        <li class="nav-item">
+                            <a class="nav-link {% if request.path == '/' %}active{% endif %}" href="/">
+                                <i class="bi bi-house-door"></i> Dashboard
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link {% if request.path == '/processamentos' %}active{% endif %}" href="/processamentos">
+                                <i class="bi bi-list-check"></i> Processamentos
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link" href="#" data-bs-toggle="modal" data-bs-target="#novoProcessamentoModal">
+                                <i class="bi bi-play-circle"></i> Novo Processamento
+                            </a>
+                        </li>
+                    </ul>
+                    
+                    <h6 class="sidebar-heading d-flex justify-content-between align-items-center px-3 mt-4 mb-1 text-light">
+                        <span>Processamento Rápido</span>
+                    </h6>
+                    <ul class="nav flex-column mb-2">
+                        <li class="nav-item">
+                            <a class="nav-link" href="#" data-bs-toggle="modal" data-bs-target="#novoProcessamentoModal" data-tipo="baixar">
+                                <i class="bi bi-cloud-download"></i> Baixar Dados
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link" href="#" data-bs-toggle="modal" data-bs-target="#novoProcessamentoModal" data-tipo="descompactar">
+                                <i class="bi bi-file-earmark-zip"></i> Descompactar
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link" href="#" data-bs-toggle="modal" data-bs-target="#novoProcessamentoModal" data-tipo="converter">
+                                <i class="bi bi-arrow-repeat"></i> Converter
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link" href="#" data-bs-toggle="modal" data-bs-target="#novoProcessamentoModal" data-tipo="completo">
+                                <i class="bi bi-check2-all"></i> Processamento Completo
+                            </a>
+                        </li>
+                    </ul>
+                </div>
+            </nav>
+
+            <main class="col-md-9 ms-sm-auto col-lg-10 px-md-4">
+                {% with messages = get_flashed_messages(with_categories=true) %}
+                    {% if messages %}
+                        {% for category, message in messages %}
+                            <div class="alert alert-{{ category }} alert-dismissible fade show mt-3" role="alert">
+                                {{ message }}
+                                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                            </div>
+                        {% endfor %}
+                    {% endif %}
+                {% endwith %}
+                
+                {% block content %}{% endblock %}
+            </main>
+        </div>
+    </div>
+
+    <!-- Modal para Novo Processamento -->
+    <div class="modal fade" id="novoProcessamentoModal" tabindex="-1" aria-labelledby="novoProcessamentoModalLabel" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="novoProcessamentoModalLabel">Iniciar Novo Processamento</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <form action="/iniciar_processamento" method="post">
+                    <div class="modal-body">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        
+                        <div class="mb-3">
+                            <label for="comando" class="form-label">Comando</label>
+                            <select class="form-select" id="comando" name="comando" required>
+                                <option value="" selected disabled>Selecione um comando</option>
+                                <option value="baixar">Baixar dados</option>
+                                <option value="descompactar">Descompactar arquivos</option>
+                                <option value="converter">Converter para Parquet</option>
+                                <option value="consolidar">Consolidar dados</option>
+                                <option value="completo">Processamento completo</option>
+                            </select>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="ano" class="form-label">Ano</label>
+                            <select class="form-select" id="ano" name="ano" required>
+                                <option value="" selected disabled>Selecione um ano</option>
+                                {% for ano in range(2020, 2025) %}
+                                    <option value="{{ ano }}">{{ ano }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="mes" class="form-label">Mês (opcional)</label>
+                            <select class="form-select" id="mes" name="mes">
+                                <option value="" selected>Todos os meses</option>
+                                {% for mes in range(1, 13) %}
+                                    <option value="{{ mes }}">{{ mes }} - {{ ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'][mes-1] }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                        <button type="submit" class="btn btn-primary">Iniciar Processamento</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+        // Script para pré-selecionar o tipo de processamento quando clicado no menu lateral
+        document.addEventListener('DOMContentLoaded', function() {
+            const links = document.querySelectorAll('.nav-link[data-tipo]');
+            links.forEach(link => {
+                link.addEventListener('click', function(e) {
+                    const tipo = this.getAttribute('data-tipo');
+                    const select = document.getElementById('comando');
+                    for(let i = 0; i < select.options.length; i++) {
+                        if(select.options[i].value === tipo) {
+                            select.selectedIndex = i;
+                            break;
+                        }
+                    }
+                });
+            });
+        });
+    </script>
+    {% block extra_js %}{% endblock %}
+</body>
+</html>
