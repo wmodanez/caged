@@ -89,6 +89,32 @@
         </div>
     </div>
 </div>
+<!-- Modal de Confirmação de Exclusão -->
+<div class="modal fade" id="modalConfirmacaoExclusao" tabindex="-1" aria-labelledby="modalConfirmacaoExclusaoLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="modalConfirmacaoExclusaoLabel">
+                    <i class="bi bi-exclamation-triangle text-warning"></i>
+                    Confirmar Exclusão
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <p id="mensagemConfirmacaoExclusao">Tem certeza que deseja excluir este processamento? Esta ação não pode ser desfeita.</p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+                    <i class="bi bi-x-circle"></i> Cancelar
+                </button>
+                <button type="button" class="btn btn-danger" id="btnConfirmarExclusao">
+                    <i class="bi bi-trash"></i> Excluir
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
 {% endblock %}
 
 {% block extra_js %}
@@ -194,11 +220,9 @@
                         <a href="/processamento/${p.id}" class="btn btn-sm btn-outline-primary" title="Visualizar detalhes">
                             <i class="bi bi-eye"></i>
                         </a>
-                        <form method="POST" action="/api/processamento/${p.id}/excluir" style="display:inline;">
-                            <button type="submit" class="btn btn-sm btn-outline-danger" title="Excluir processamento">
-                                <i class="bi bi-trash"></i>
-                            </button>
-                        </form>
+                        <button type="button" class="btn btn-sm btn-outline-danger" title="Excluir processamento" onclick="confirmarExclusao(${p.id})">
+                            <i class="bi bi-trash"></i>
+                        </button>
                     </div>
                 </td>
             `;
@@ -222,12 +246,21 @@
     
     // Função para confirmar exclusão
     function confirmarExclusao(id) {
-        console.log(`Confirmando exclusão do processamento ${id}...`);
-        console.log('Botão de exclusão clicado');
+        // Configurar o modal de confirmação
+        const modal = document.getElementById('modalConfirmacaoExclusao');
+        const btnConfirmar = document.getElementById('btnConfirmarExclusao');
+        const mensagemModal = document.getElementById('mensagemConfirmacaoExclusao');
         
-        // Sempre tentar excluir para fins de teste (sem confirmação)
-        console.log(`Exclusão confirmada para o processamento ${id}`);
-        excluirProcessamento(id);
+        mensagemModal.textContent = `Tem certeza que deseja excluir o processamento #${id}? Esta ação não pode ser desfeita.`;
+        
+        // Configurar o botão de confirmação
+        btnConfirmar.onclick = function() {
+            excluirProcessamento(id);
+            bootstrap.Modal.getInstance(modal).hide();
+        };
+        
+        // Exibir o modal
+        new bootstrap.Modal(modal).show();
     }
     
     // Função para excluir processamento
@@ -278,7 +311,20 @@
         })
         .catch(error => {
             console.error('Erro ao excluir processamento:', error);
-            alert('Erro ao excluir processamento. Verifique o console para mais detalhes.');
+            
+            // Exibir mensagem de erro
+            const alertDiv = document.createElement('div');
+            alertDiv.className = 'alert alert-danger alert-dismissible fade show';
+            alertDiv.innerHTML = `
+                Erro ao excluir processamento. Verifique o console para mais detalhes.
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+            `;
+            document.querySelector('.card-body').prepend(alertDiv);
+            
+            // Remover alerta após 5 segundos
+            setTimeout(() => {
+                alertDiv.remove();
+            }, 5000);
         });
     }
     
