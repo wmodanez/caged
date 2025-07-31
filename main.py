@@ -18,14 +18,53 @@ logger.add("logs/caged_{time}.log", rotation="1 day", retention="30 days")
 
 @click.group()
 @click.version_option(version="1.0.0")
-def cli():
+@click.option('--log-level', type=click.Choice(['debug', 'info', 'warn'], case_sensitive=False), default='warn', help='Nível de log (debug, info, warn)')
+@click.pass_context
+def cli(ctx, log_level):
     """
     🎯 Processador de Dados CAGED
     
     Sistema para download, processamento e consolidação de dados mensais
     do Cadastro Geral de Empregados e Desempregados (CAGED).
+    
+    Exemplos de uso com níveis de log:
+    \b
+    # Executar com log padrão (warn)
+    python main.py baixar --ano 2024 --mes 1
+    
+    # Executar com log detalhado (info)
+    python main.py --log-level info baixar --ano 2024 --mes 1
+    
+    # Executar com log de debug
+    python main.py --log-level debug baixar --ano 2024 --mes 1
     """
-    pass
+    # Configurar nível de log baseado no parâmetro
+    ctx.ensure_object(dict)
+    
+    # Mapear níveis de log para o formato do loguru
+    log_level_map = {
+        'debug': 'DEBUG',
+        'info': 'INFO', 
+        'warn': 'WARNING'
+    }
+    
+    loguru_level = log_level_map[log_level.lower()]
+    ctx.obj['log_level'] = loguru_level
+    
+    # Remover handlers existentes e configurar novo nível
+    logger.remove()
+    
+    # Configurar log para arquivo com o nível especificado
+    logger.add("logs/caged_{time}.log", 
+               rotation="1 day", 
+               retention="30 days", 
+               level=loguru_level)
+    
+    # Configurar log para console apenas se for debug ou info
+    if log_level.lower() in ['debug', 'info']:
+        logger.add(lambda msg: click.echo(f"🔍 {msg}", err=True), 
+                   level=loguru_level,
+                   format="{time:HH:mm:ss} | {level} | {message}")
 
 
 @cli.command()
@@ -33,9 +72,13 @@ def cli():
 @click.option('--mes', type=int, help='Mês específico (1-12)')
 @click.option('--mes-inicio', type=int, help='Mês inicial para faixa')
 @click.option('--mes-fim', type=int, help='Mês final para faixa')
+@click.option('--ano-inicio', type=int, help='Ano inicial para faixa de anos')
+@click.option('--mes-inicio-faixa', type=int, help='Mês inicial para faixa de anos (1-12)')
+@click.option('--ano-fim', type=int, help='Ano final para faixa de anos')
+@click.option('--mes-fim-faixa', type=int, help='Mês final para faixa de anos (1-12)')
 @click.option('--todos-anos', is_flag=True, help='Baixar todos os anos disponíveis')
 @click.option('--todos-meses', is_flag=True, help='Baixar todos os meses do ano especificado')
-def baixar(ano, mes, mes_inicio, mes_fim, todos_anos, todos_meses):
+def baixar(ano, mes, mes_inicio, mes_fim, ano_inicio, mes_inicio_faixa, ano_fim, mes_fim_faixa, todos_anos, todos_meses):
     """
     📥 Apenas baixa dados CAGED do servidor FTP oficial
     
@@ -52,22 +95,60 @@ def baixar(ano, mes, mes_inicio, mes_fim, todos_anos, todos_meses):
     
     # Baixar todos os anos disponíveis
     python main.py baixar --todos-anos
+    
+    # Baixar faixa de datas: janeiro/2020 até abril/2020
+    python main.py baixar --ano-inicio 2020 --mes-inicio-faixa 1 --ano-fim 2020 --mes-fim-faixa 4
+    
+    # Baixar faixa de datas: julho/2021 até março/2023
+    python main.py baixar --ano-inicio 2021 --mes-inicio-faixa 7 --ano-fim 2023 --mes-fim-faixa 3
     """
-    logger.info(f"Iniciando download - Configurações: Ano: {ano}, Mês: {mes}, Todos anos: {todos_anos}, Todos meses: {todos_meses}")
+    logger.info(f"Iniciando download - Configurações: Ano: {ano}, Mês: {mes}, Faixa: {ano_inicio}/{mes_inicio_faixa} até {ano_fim}/{mes_fim_faixa}, Todos anos: {todos_anos}, Todos meses: {todos_meses}")
     
     gerenciador = GerenciadorArquivosCaged()
     gerenciador.conectar()
     
     try:
         # Validações
-        if not todos_anos and ano is None:
-            click.echo("❌ Erro: Especifique um ano ou use --todos-anos")
+        if not todos_anos and ano is None and ano_inicio is None:
+            click.echo("❌ Erro: Especifique um ano, uma faixa de datas ou use --todos-anos")
             return
+        
+        # Validação para faixa de datas
+        if ano_inicio is not None or ano_fim is not None:
+            if ano_inicio is None or ano_fim is None or mes_inicio_faixa is None or mes_fim_faixa is None:
+                click.echo("❌ Erro: Para faixa de datas, especifique --ano-inicio, --mes-inicio-faixa, --ano-fim e --mes-fim-faixa")
+                return
+            if ano_inicio > ano_fim or (ano_inicio == ano_fim and mes_inicio_faixa > mes_fim_faixa):
+                click.echo("❌ Erro: Data inicial deve ser anterior à data final")
+                return
+            if not (1 <= mes_inicio_faixa <= 12) or not (1 <= mes_fim_faixa <= 12):
+                click.echo("❌ Erro: Meses devem estar entre 1 e 12")
+                return
         
         total_downloads = 0
         total_metadados = []
         
-        if todos_anos:
+        if ano_inicio is not None and ano_fim is not None:
+            # Baixar faixa de datas
+            click.echo(f"🔄 Baixando faixa de datas: {mes_inicio_faixa:02d}/{ano_inicio} até {mes_fim_faixa:02d}/{ano_fim}")
+            
+            ano_atual = ano_inicio
+            mes_atual = mes_inicio_faixa
+            
+            while ano_atual < ano_fim or (ano_atual == ano_fim and mes_atual <= mes_fim_faixa):
+                click.echo(f"🔄 Processando {ano_atual}/{mes_atual:02d}")
+                sucesso, metadados = gerenciador.baixar_dados_mensais(ano_atual, mes_atual)
+                if sucesso:
+                    total_downloads += 1
+                    total_metadados.extend(metadados)
+                
+                # Avançar para o próximo mês
+                mes_atual += 1
+                if mes_atual > 12:
+                    mes_atual = 1
+                    ano_atual += 1
+                    
+        elif todos_anos:
             # Baixar todos os anos disponíveis
             anos = gerenciador.listar_anos_disponiveis()
             click.echo(f"📅 Anos disponíveis: {anos}")
@@ -418,11 +499,15 @@ def descompactar(ano, mes, todos):
 
 
 @cli.command()
-@click.option('--ano', type=int, required=True, help='Ano dos dados')
+@click.option('--ano', type=int, help='Ano dos dados')
 @click.option('--mes', type=int, help='Mês específico')
+@click.option('--ano-inicio', type=int, help='Ano inicial para faixa de anos')
+@click.option('--mes-inicio-faixa', type=int, help='Mês inicial para faixa de anos (1-12)')
+@click.option('--ano-fim', type=int, help='Ano final para faixa de anos')
+@click.option('--mes-fim-faixa', type=int, help='Mês final para faixa de anos (1-12)')
 @click.option('--consolidacao-anual', is_flag=True, help='Processar ano completo')
 @click.option('--campos', multiple=True, help='Campos específicos a processar')
-def completo(ano, mes, consolidacao_anual, campos):
+def completo(ano, mes, ano_inicio, mes_inicio_faixa, ano_fim, mes_fim_faixa, consolidacao_anual, campos):
     """
     🚀 Processamento completo: baixa, descompacta e converte dados CAGED
     
@@ -433,8 +518,31 @@ def completo(ano, mes, consolidacao_anual, campos):
     
     # Processamento completo do ano de 2024
     python main.py completo --ano 2024 --consolidacao-anual
+    
+    # Processamento completo de faixa: janeiro/2020 até abril/2020
+    python main.py completo --ano-inicio 2020 --mes-inicio-faixa 1 --ano-fim 2020 --mes-fim-faixa 4
+    
+    # Processamento completo de faixa: julho/2021 até março/2023
+    python main.py completo --ano-inicio 2021 --mes-inicio-faixa 7 --ano-fim 2023 --mes-fim-faixa 3
     """
-    logger.info(f"Iniciando processamento completo - Ano: {ano}, Mês: {mes}, Consolidacao anual: {consolidacao_anual}")
+    logger.info(f"Iniciando processamento completo - Ano: {ano}, Mês: {mes}, Faixa: {ano_inicio}/{mes_inicio_faixa} até {ano_fim}/{mes_fim_faixa}, Consolidacao anual: {consolidacao_anual}")
+    
+    # Validações
+    if not consolidacao_anual and ano is None and mes is None and ano_inicio is None:
+        click.echo("❌ Erro: Especifique um ano/mês, uma faixa de datas ou use --consolidacao-anual")
+        return
+    
+    # Validação para faixa de datas
+    if ano_inicio is not None or ano_fim is not None:
+        if ano_inicio is None or ano_fim is None or mes_inicio_faixa is None or mes_fim_faixa is None:
+            click.echo("❌ Erro: Para faixa de datas, especifique --ano-inicio, --mes-inicio-faixa, --ano-fim e --mes-fim-faixa")
+            return
+        if ano_inicio > ano_fim or (ano_inicio == ano_fim and mes_inicio_faixa > mes_fim_faixa):
+            click.echo("❌ Erro: Data inicial deve ser anterior à data final")
+            return
+        if not (1 <= mes_inicio_faixa <= 12) or not (1 <= mes_fim_faixa <= 12):
+            click.echo("❌ Erro: Meses devem estar entre 1 e 12")
+            return
     
     gerenciador = GerenciadorArquivosCaged()
     descompactador = DescompactadorCaged()
@@ -443,7 +551,52 @@ def completo(ano, mes, consolidacao_anual, campos):
     gerenciador.conectar()
     
     try:
-        if consolidacao_anual:
+        if ano_inicio is not None and ano_fim is not None:
+            # Processamento completo de faixa de datas
+            click.echo(f"🚀 Processamento completo da faixa: {mes_inicio_faixa:02d}/{ano_inicio} até {mes_fim_faixa:02d}/{ano_fim}")
+            
+            ano_atual = ano_inicio
+            mes_atual = mes_inicio_faixa
+            
+            while ano_atual < ano_fim or (ano_atual == ano_fim and mes_atual <= mes_fim_faixa):
+                click.echo(f"🔄 Processando {ano_atual}/{mes_atual:02d}")
+                
+                # 1. Baixar
+                sucesso_download, _ = gerenciador.baixar_dados_mensais(ano_atual, mes_atual)
+                if not sucesso_download:
+                    click.echo(f"❌ Falha no download de {ano_atual}/{mes_atual:02d}")
+                    # Avançar para o próximo mês mesmo com falha
+                    mes_atual += 1
+                    if mes_atual > 12:
+                        mes_atual = 1
+                        ano_atual += 1
+                    continue
+                
+                # 2. Descompactar
+                sucesso_descompactar = descompactador.descompactar_mensal(ano_atual, mes_atual)
+                if not sucesso_descompactar:
+                    click.echo(f"❌ Falha na descompactação de {ano_atual}/{mes_atual:02d}")
+                    # Avançar para o próximo mês mesmo com falha
+                    mes_atual += 1
+                    if mes_atual > 12:
+                        mes_atual = 1
+                        ano_atual += 1
+                    continue
+                
+                # 3. Converter
+                sucesso_conversao = conversor.converter_mensal(ano_atual, mes_atual, campos)
+                if sucesso_conversao:
+                    click.echo(f"✅ {ano_atual}/{mes_atual:02d} processado completamente")
+                else:
+                    click.echo(f"❌ Falha na conversão de {ano_atual}/{mes_atual:02d}")
+                
+                # Avançar para o próximo mês
+                mes_atual += 1
+                if mes_atual > 12:
+                    mes_atual = 1
+                    ano_atual += 1
+                    
+        elif consolidacao_anual:
             click.echo(f"🚀 Processamento completo do ano: {ano}")
             for mes_atual in range(1, 13):
                 click.echo(f"🔄 Processando {ano}/{mes_atual:02d}")
@@ -489,7 +642,7 @@ def completo(ano, mes, consolidacao_anual, campos):
             else:
                 click.echo(f"❌ Falha na conversão")
         else:
-            click.echo("❌ Erro: Especifique mês ou use --consolidacao-anual")
+            click.echo("❌ Erro: Especifique mês, faixa de datas ou use --consolidacao-anual")
     finally:
         gerenciador.desconectar()
 
@@ -542,4 +695,4 @@ if __name__ == '__main__':
     for dir_name in ['files-zip', 'files-unzip', 'parquet', 'logs']:
         Path(dir_name).mkdir(exist_ok=True)
     
-    cli() 
+    cli()
