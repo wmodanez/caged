@@ -106,6 +106,14 @@ class GerenciadorArquivosCaged:
             self.ftp_conn.cwd(diretorio_ano)
             if mes:
                 diretorio_mes = f"{ano}{mes:02d}"
+                logger.info(f"📁 Verificando existência do diretório do mês: {diretorio_mes}")
+                
+                # Verificar se o diretório do mês existe antes de tentar acessá-lo
+                diretorios_disponiveis = self.ftp_conn.nlst()
+                if diretorio_mes not in diretorios_disponiveis:
+                    logger.warning(f"⚠️ Diretório do mês {diretorio_mes} não encontrado no servidor FTP")
+                    return []
+                
                 logger.info(f"📁 Navegando para diretório do mês: {diretorio_mes}")
                 self.ftp_conn.cwd(diretorio_mes)
                 logger.info(f"🔍 Listando arquivos CAGED para {ano}/{mes:02d}")
@@ -149,32 +157,110 @@ class GerenciadorArquivosCaged:
         Returns:
             Tuple[bool, List[Dict]]: (Sucesso, Lista de metadados dos downloads)
         """
+        # Verificar conexão e reconectar se necessário
         if not self.ftp_conn:
-            logger.error("❌ Não conectado ao FTP. Use conectar() primeiro.")
+            logger.warning("⚠️ Não conectado ao FTP. Tentando reconectar...")
+            if not self.conectar():
+                logger.error("❌ Falha ao conectar ao FTP. Não é possível baixar os dados.")
+                return False, []
+        
+        # Preparar diretório de destino
+        try:
+            destino = Path(diretorio_destino) / str(ano) / f"{ano}{mes:02d}"
+            destino.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            logger.error(f"❌ Erro ao criar diretório de destino: {e}", exc_info=True)
             return False, []
-        destino = Path(diretorio_destino) / str(ano) / f"{ano}{mes:02d}"
-        destino.mkdir(parents=True, exist_ok=True)
-        arquivos = self.listar_arquivos_mensais(ano, mes)
-        if not arquivos:
-            logger.error(f"❌ Nenhum arquivo encontrado para {ano}/{mes:02d}")
-            return False, []
+        
+        # Listar arquivos disponíveis
+        try:
+            arquivos = self.listar_arquivos_mensais(ano, mes)
+            if not arquivos:
+                # Verificar se é porque o diretório não existe
+                try:
+                    # Navegar para o diretório do ano para verificar os meses disponíveis
+                    self.ftp_conn.cwd(str(ano))
+                    meses_disponiveis = self.ftp_conn.nlst()
+                    diretorio_mes = f"{ano}{mes:02d}"
+                    if diretorio_mes not in meses_disponiveis:
+                        logger.warning(f"⚠️ O mês {mes:02d} não está disponível no servidor FTP para o ano {ano}")
+                        logger.info(f"ℹ️ Meses disponíveis para {ano}: {', '.join(meses_disponiveis)}")
+                    else:
+                        logger.error(f"❌ O diretório do mês {diretorio_mes} existe, mas não contém arquivos .7z")
+                except Exception as e_check:
+                    logger.error(f"❌ Erro ao verificar meses disponíveis: {e_check}")
+                
+                return False, []
+        except Exception as e:
+            logger.error(f"❌ Erro ao listar arquivos para {ano}/{mes:02d}: {e}", exc_info=True)
+            # Tentar reconectar e listar novamente
+            try:
+                self.desconectar()
+                if self.conectar():
+                    arquivos = self.listar_arquivos_mensais(ano, mes)
+                    if not arquivos:
+                        logger.error(f"❌ Nenhum arquivo encontrado após reconexão para {ano}/{mes:02d}")
+                        return False, []
+                else:
+                    logger.error("❌ Falha ao reconectar ao FTP.")
+                    return False, []
+            except Exception as e2:
+                logger.error(f"❌ Erro ao reconectar e listar arquivos: {e2}", exc_info=True)
+                return False, []
+        
         logger.info(f"📦 Baixando arquivos CAGED para {ano}/{mes:02d} (contém dados de todas as UFs)")
         sucessos = 0
         total = len(arquivos)
         metadados_downloads = []
         logger.info(f"📥 Iniciando download de {total} arquivos...")
+        
+        # Baixar cada arquivo
         for i, arquivo in enumerate(arquivos, 1):
+            # Verificar se a conexão ainda está ativa
+            try:
+                self.ftp_conn.voidcmd('NOOP')
+            except:
+                logger.warning("⚠️ Conexão FTP perdida. Tentando reconectar...")
+                if not self.conectar():
+                    logger.error("❌ Falha ao reconectar ao FTP. Interrompendo downloads.")
+                    break
+                try:
+                    # Navegar novamente para o diretório correto após reconexão
+                    self.ftp_conn.cwd(str(ano))
+                    self.ftp_conn.cwd(f"{ano}{mes:02d}")
+                except Exception as e:
+                    logger.error(f"❌ Erro ao navegar para o diretório após reconexão: {e}", exc_info=True)
+                    break
+            
             try:
                 logger.info(f"📥 [{i}/{total}] Baixando: {arquivo}")
                 caminho_local = destino / arquivo
+                
+                # Verificar se o arquivo já existe
                 if self.verificar_arquivo_existe(str(caminho_local)):
                     logger.info(f"⏭️  Arquivo já existe: {arquivo}")
                     metadados = self.metadados_downloads.get(arquivo, self._extrair_metadados_arquivo(arquivo, ano, mes))
                     metadados_downloads.append(metadados)
                     sucessos += 1
                     continue
-                with open(caminho_local, 'wb') as f:
-                    self.ftp_conn.retrbinary(f'RETR {arquivo}', f.write)
+                
+                # Baixar o arquivo com tratamento de erros aprimorado
+                try:
+                    with open(caminho_local, 'wb') as f:
+                        self.ftp_conn.retrbinary(f'RETR {arquivo}', f.write)
+                except ftplib.error_temp as e:
+                    logger.warning(f"⚠️ Erro temporário ao baixar {arquivo}: {e}. Tentando novamente...")
+                    try:
+                        # Esperar um pouco e tentar novamente
+                        import time
+                        time.sleep(2)
+                        with open(caminho_local, 'wb') as f:
+                            self.ftp_conn.retrbinary(f'RETR {arquivo}', f.write)
+                    except Exception as e2:
+                        logger.error(f"❌ Falha na segunda tentativa de download: {e2}")
+                        continue
+                
+                # Verificar se o download foi bem-sucedido
                 if caminho_local.exists() and caminho_local.stat().st_size > 0:
                     sucessos += 1
                     tamanho = self._formatar_tamanho(caminho_local.stat().st_size)
@@ -183,9 +269,10 @@ class GerenciadorArquivosCaged:
                     metadados_downloads.append(metadados)
                     self.metadados_downloads[arquivo] = metadados
                 else:
-                    logger.error(f"❌ Falha no download: {arquivo}")
+                    logger.error(f"❌ Falha no download: {arquivo} - Arquivo vazio ou não criado")
             except Exception as e:
                 logger.error(f"❌ Erro ao baixar {arquivo}: {e}", exc_info=True)
+        
         logger.info(f"📊 Download concluído: {sucessos}/{total} arquivos baixados")
         self._criar_indicadores_download(ano, mes, sucessos, total)
         return sucessos > 0, metadados_downloads
@@ -467,4 +554,4 @@ def testar_conexao_caged():
 
 
 if __name__ == "__main__":
-    testar_conexao_caged() 
+    testar_conexao_caged()

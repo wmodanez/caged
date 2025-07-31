@@ -169,7 +169,7 @@
             
             // Formatar período
             let periodo = p.ano.toString();
-            if (p.mes) {
+            if (p.mes !== null && p.mes !== undefined) {
                 const meses = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
                 periodo += '/' + meses[p.mes - 1];
             }

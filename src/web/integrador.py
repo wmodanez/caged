@@ -23,10 +23,69 @@ class IntegradorCagedDashboard:
                 atualizar_processamento(processamento_id, progresso=progresso)
             
             # Baixar arquivos
-            if mes:
-                gerenciador.baixar_arquivos_por_mes(ano, mes, callback=callback_progresso)
+            if mes is not None:  # Download de um mês específico
+                sucesso, _ = gerenciador.baixar_dados_mensais(ano, mes)
             else:
-                gerenciador.baixar_arquivos_por_ano(ano, callback=callback_progresso)
+                # Para download anual, verificar quais meses estão disponíveis
+                sucesso = True
+                meses_disponiveis = []
+                
+                # Verificar quais meses estão disponíveis no servidor FTP
+                if gerenciador.conectar():
+                    try:
+                        gerenciador.ftp_conn.cwd(str(ano))
+                        diretorios = gerenciador.ftp_conn.nlst()
+                        
+                        for diretorio in diretorios:
+                            if diretorio.startswith(str(ano)) and len(diretorio) == 6:  # formato AAAAMM
+                                mes_num = int(diretorio[-2:])
+                                meses_disponiveis.append(mes_num)
+                        
+                        meses_disponiveis.sort()
+                        atualizar_processamento(
+                            processamento_id,
+                            mensagem=f'Meses disponíveis para {ano}: {meses_disponiveis}'
+                        )
+                    except Exception as e:
+                        atualizar_processamento(
+                            processamento_id,
+                            mensagem=f'Erro ao verificar meses disponíveis: {str(e)}. Tentando todos os meses.'
+                        )
+                        meses_disponiveis = list(range(1, 13))
+                else:
+                    atualizar_processamento(
+                        processamento_id,
+                        mensagem='Falha ao conectar ao FTP. Tentando todos os meses.'
+                    )
+                    meses_disponiveis = list(range(1, 13))
+                
+                # Baixar cada mês disponível
+                meses_baixados = 0
+                for m in meses_disponiveis:
+                    try:
+                        atualizar_processamento(
+                            processamento_id,
+                            mensagem=f'Baixando dados para {ano}/{m:02d}...'
+                        )
+                        sucesso_mes, metadados = gerenciador.baixar_dados_mensais(ano, m)
+                        
+                        if sucesso_mes:
+                            meses_baixados += 1
+                            atualizar_processamento(
+                                processamento_id,
+                                mensagem=f'Download concluído para {ano}/{m:02d}. Arquivos: {len(metadados)}'
+                            )
+                        else:
+                            atualizar_processamento(
+                                processamento_id,
+                                mensagem=f'Falha no download para {ano}/{m:02d}'
+                            )
+                    except Exception as e:
+                        sucesso = False
+                        atualizar_processamento(
+                            processamento_id,
+                            mensagem=f'Erro no mês {m}: {str(e)}'
+                        )
             
             # Atualizar status para concluído
             atualizar_processamento(
