@@ -266,7 +266,7 @@ class DescompactadorCaged:
             
         # Criar competência formatada
         if "ano" in metadados and "mes" in metadados:
-            metadados["competencia"] = f"{metadados['ano']}-{metadados['mes']:02d}"
+            metadados["competencia"] = f"{metadados['ano']}-{int(metadados['mes']):02d}"
         
         return metadados
     
@@ -443,4 +443,4 @@ def testar_descompactador():
 
 
 if __name__ == "__main__":
-    testar_descompactador() 
+    testar_descompactador()
