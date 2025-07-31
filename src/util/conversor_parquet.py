@@ -47,6 +47,9 @@ CONFIG_PARALELISMO = {
     'chunk_size_max': 200000,  # Tamanho máximo do chunk
     'memoria_limite_mb': 2048,  # Limite de memória por worker
     'timeout_arquivo': 300,  # Timeout por arquivo (segundos)
+    'fator_memoria_chunk': 0.8,  # Fator de segurança para memória
+    'bytes_por_linha_estimado': 150,  # Estimativa de bytes por linha
+    'memoria_disponivel_mb': 4096,  # Memória disponível estimada
 }
 
 # Configurações de encoding e separadores
@@ -245,6 +248,125 @@ class ConversorParquetCaged:
         logger.info(f"Destino: {self.diretorio_destino}")
         logger.info(f"Paralelismo: {self.habilitar_paralelismo} (workers: {self.max_workers})")
         logger.info(f"Chunk size: {self.chunk_size}")
+    
+    def _calcular_chunk_size_dinamico(self, tamanho_arquivo_bytes: int, 
+                                     numero_colunas: int = 50) -> int:
+        """
+        Calcula o tamanho do chunk dinamicamente baseado no tamanho do arquivo,
+        número de colunas e memória disponível
+        
+        Args:
+            tamanho_arquivo_bytes: Tamanho do arquivo em bytes
+            numero_colunas: Número de colunas no arquivo
+            
+        Returns:
+            Tamanho otimizado do chunk em linhas
+        """
+        # Obter configurações
+        config = CONFIG_PARALELISMO
+        
+        # Calcular estimativa de linhas no arquivo
+        bytes_por_linha = config['bytes_por_linha_estimado'] * (numero_colunas / 50)
+        linhas_estimadas = max(1, tamanho_arquivo_bytes // bytes_por_linha)
+        
+        # Calcular chunk size baseado na memória disponível
+        memoria_por_worker_mb = config['memoria_limite_mb']
+        memoria_chunk_mb = memoria_por_worker_mb * config['fator_memoria_chunk']
+        
+        # Converter para bytes e calcular linhas por chunk
+        memoria_chunk_bytes = memoria_chunk_mb * 1024 * 1024
+        chunk_size_memoria = max(1, memoria_chunk_bytes // bytes_por_linha)
+        
+        # Calcular chunk size baseado no tamanho do arquivo
+        tamanho_arquivo_gb = tamanho_arquivo_bytes / (1024**3)
+        
+        if tamanho_arquivo_gb < 0.1:  # Arquivos muito pequenos
+            chunk_size_arquivo = min(linhas_estimadas, config['chunk_size_min'])
+        elif tamanho_arquivo_gb < 1:  # Arquivos pequenos
+            chunk_size_arquivo = config['chunk_size'] // 2
+        elif tamanho_arquivo_gb < 5:  # Arquivos médios
+            chunk_size_arquivo = config['chunk_size']
+        else:  # Arquivos grandes
+            chunk_size_arquivo = config['chunk_size_max']
+        
+        # Usar o menor entre os dois cálculos para garantir que caiba na memória
+        chunk_size_otimo = min(chunk_size_memoria, chunk_size_arquivo)
+        
+        # Aplicar limites mínimo e máximo
+        chunk_size_final = max(
+            config['chunk_size_min'],
+            min(chunk_size_otimo, config['chunk_size_max'])
+        )
+        
+        logger.debug(f"Chunk size calculado: {chunk_size_final:,} linhas ")
+        logger.debug(f"  - Arquivo: {tamanho_arquivo_gb:.2f} GB, {linhas_estimadas:,} linhas estimadas")
+        logger.debug(f"  - Memória: {memoria_chunk_mb:.1f} MB por chunk")
+        logger.debug(f"  - Colunas: {numero_colunas}, {bytes_por_linha:.0f} bytes/linha")
+        
+        return int(chunk_size_final)
+    
+    def _obter_memoria_disponivel(self) -> int:
+        """
+        Obtém a quantidade de memória disponível no sistema
+        
+        Returns:
+            Memória disponível em MB
+        """
+        try:
+            import psutil
+            memoria = psutil.virtual_memory()
+            memoria_disponivel_mb = memoria.available // (1024 * 1024)
+            
+            # Usar no máximo 80% da memória disponível
+            memoria_utilizavel = int(memoria_disponivel_mb * 0.8)
+            
+            logger.debug(f"Memória disponível: {memoria_disponivel_mb:,} MB ")
+            logger.debug(f"Memória utilizável: {memoria_utilizavel:,} MB")
+            
+            return memoria_utilizavel
+            
+        except ImportError:
+            logger.warning("psutil não disponível, usando valor padrão")
+            return CONFIG_PARALELISMO['memoria_disponivel_mb']
+        except Exception as e:
+            logger.warning(f"Erro ao obter memória disponível: {e}")
+            return CONFIG_PARALELISMO['memoria_disponivel_mb']
+    
+    def _ajustar_chunk_size_para_memoria(self, chunk_size_inicial: int, 
+                                        numero_colunas: int) -> int:
+        """
+        Ajusta o chunk size baseado na memória disponível do sistema
+        
+        Args:
+            chunk_size_inicial: Chunk size inicial calculado
+            numero_colunas: Número de colunas no arquivo
+            
+        Returns:
+            Chunk size ajustado para a memória disponível
+        """
+        memoria_disponivel_mb = self._obter_memoria_disponivel()
+        
+        # Calcular memória necessária por linha (estimativa)
+        bytes_por_linha = CONFIG_PARALELISMO['bytes_por_linha_estimado'] * numero_colunas
+        memoria_por_chunk_mb = (chunk_size_inicial * bytes_por_linha) / (1024 * 1024)
+        
+        # Se o chunk usar mais que 50% da memória disponível, reduzir
+        limite_memoria_chunk = memoria_disponivel_mb * 0.5
+        
+        if memoria_por_chunk_mb > limite_memoria_chunk:
+            fator_reducao = limite_memoria_chunk / memoria_por_chunk_mb
+            chunk_size_ajustado = int(chunk_size_inicial * fator_reducao)
+            
+            # Garantir que não fique abaixo do mínimo
+            chunk_size_ajustado = max(
+                chunk_size_ajustado, 
+                CONFIG_PARALELISMO['chunk_size_min']
+            )
+            
+            logger.info(f"Chunk size ajustado para memória: {chunk_size_inicial:,} → {chunk_size_ajustado:,}")
+            return chunk_size_ajustado
+        
+        return chunk_size_inicial
     
     def _criar_mapeamento_dinamico(self, colunas: List[str]) -> Dict[str, str]:
         """
@@ -514,15 +636,17 @@ class ConversorParquetCaged:
                                arquivo: Path, 
                                ano: int, 
                                mes: int,
-                               campos_selecionados: Optional[List[str]] = None) -> Tuple[pl.DataFrame, List, List, List]:
+                               campos_selecionados: Optional[List[str]] = None,
+                               usar_chunks: bool = True) -> Tuple[pl.DataFrame, List, List, List]:
         """
-        Processa um arquivo mensal CAGED com sistema otimizado
+        Processa um arquivo mensal CAGED com sistema otimizado e processamento em chunks
         
         Args:
             arquivo: Caminho do arquivo
             ano: Ano dos dados
             mes: Mês dos dados
             campos_selecionados: Campos específicos a processar
+            usar_chunks: Se deve usar processamento em chunks para arquivos grandes
             
         Returns:
             Tuple[DataFrame, List[Movimentacao], List[SaldoMensal], List[Indicador]]: Dados processados
@@ -534,83 +658,260 @@ class ConversorParquetCaged:
             
             logger.debug(f"Processando: {arquivo.name}")
             
+            # Obter informações do arquivo
+            tamanho_arquivo = arquivo.stat().st_size
+            tamanho_mb = tamanho_arquivo / (1024 * 1024)
+            
+            logger.info(f"Arquivo: {arquivo.name} ({tamanho_mb:.1f} MB)")
+            
             # Detectar encoding com sistema robusto
             encoding = self.detectar_encoding(arquivo)
             logger.debug(f"Encoding: {encoding}")
             
+            # Detectar separador com análise aprimorada
+            separador = self._detectar_separador(arquivo, encoding)
+            logger.debug(f"Separador: '{separador}'")
+            
+            # Decidir se usar processamento em chunks baseado no tamanho do arquivo
+            limite_chunk_mb = 100  # Arquivos maiores que 100MB usam chunks
+            
+            if usar_chunks and tamanho_mb > limite_chunk_mb:
+                logger.info(f"Arquivo grande ({tamanho_mb:.1f} MB), usando processamento em chunks")
+                return self._processar_arquivo_em_chunks(arquivo, ano, mes, encoding, separador, campos_selecionados)
+            else:
+                logger.info(f"Arquivo pequeno/médio ({tamanho_mb:.1f} MB), processamento direto")
+                return self._processar_arquivo_direto(arquivo, ano, mes, encoding, separador, campos_selecionados)
+    
+    def _processar_arquivo_direto(self, arquivo: Path, ano: int, mes: int, 
+                                 encoding: str, separador: str,
+                                 campos_selecionados: Optional[List[str]] = None) -> Tuple[pl.DataFrame, List, List, List]:
+        """
+        Processa arquivo diretamente na memória (para arquivos pequenos/médios)
+        """
+        try:
+            # Ler arquivo com configurações otimizadas
+            df = pl.read_csv(
+                arquivo,
+                separator=separador,
+                encoding=encoding,
+                has_header=True,
+                ignore_errors=True,
+                truncate_ragged_lines=True,
+                low_memory=False,  # Melhor para arquivos grandes
+                rechunk=True  # Otimizar chunks
+            )
+            
+            logger.info(f"Arquivo lido: {df.shape[0]:,} registros, {df.shape[1]} colunas")
+            
+            # Verificar se DataFrame não está vazio
+            if df.shape[0] == 0:
+                logger.warning(f"Arquivo {arquivo.name} está vazio")
+                return df, [], [], []
+            
+            # Padronizar colunas com sistema flexível
+            df = self._padronizar_colunas(df, arquivo)
+            
+            # Filtrar campos se especificado
+            if campos_selecionados:
+                campos_disponiveis = [c for c in campos_selecionados if c in df.columns]
+                if campos_disponiveis:
+                    df = df.select(campos_disponiveis)
+                    logger.debug(f"Campos filtrados: {len(campos_disponiveis)} de {len(campos_selecionados)}")
+                else:
+                    logger.warning("Nenhum campo selecionado encontrado no arquivo")
+            
+            # Aplicar tipos de dados com detecção automática
+            df = self._aplicar_tipos_dados(df)
+            
+            # Adicionar colunas de controle
+            df = df.with_columns([
+                pl.lit(f"{ano}-{mes:02d}").alias("ANO_MES"),
+                pl.lit(ano).alias("ANO"),
+                pl.lit(mes).alias("MES")
+            ])
+            
+            # Validar integridade dos dados
+            if self.validar_integridade_dados(df):
+                logger.info("✅ Dados validados com sucesso")
+            else:
+                logger.warning("⚠️  Alertas encontrados na validação")
+            
+            # Converter para entidades com tratamento de erro
             try:
-                # Detectar separador com análise aprimorada
-                separador = self._detectar_separador(arquivo, encoding)
-                logger.debug(f"Separador: '{separador}'")
+                movimentacoes = self._dataframe_para_movimentacoes(df, ano, mes)
+                saldos_mensais = self._calcular_saldos_mensais(df, ano, mes)
+                indicadores = self._gerar_indicadores(df, ano, mes)
                 
-                # Ler arquivo com configurações otimizadas
-                df = pl.read_csv(
+                logger.debug(f"Entidades criadas: {len(movimentacoes)} movimentações, "
+                           f"{len(saldos_mensais)} saldos, {len(indicadores)} indicadores")
+                
+            except Exception as e:
+                logger.error(f"Erro ao converter entidades: {e}")
+                # Retornar listas vazias em caso de erro
+                movimentacoes, saldos_mensais, indicadores = [], [], []
+            
+            logger.debug(f"Processamento de {arquivo.name} concluído")
+            
+            return df, movimentacoes, saldos_mensais, indicadores
+            
+        except Exception as e:
+             logger.error(f"❌ Erro ao processar arquivo: {e}", exc_info=True)
+             raise
+    
+    def _processar_arquivo_em_chunks(self, arquivo: Path, ano: int, mes: int,
+                                   encoding: str, separador: str,
+                                   campos_selecionados: Optional[List[str]] = None) -> Tuple[pl.DataFrame, List, List, List]:
+        """
+        Processa arquivo grande em chunks para otimizar uso de memória
+        """
+        try:
+            # Primeiro, ler apenas o cabeçalho para determinar as colunas
+            df_header = pl.read_csv(
+                arquivo,
+                separator=separador,
+                encoding=encoding,
+                has_header=True,
+                n_rows=1
+            )
+            
+            numero_colunas = df_header.shape[1]
+            tamanho_arquivo = arquivo.stat().st_size
+            
+            # Calcular chunk size dinâmico
+            chunk_size = self._calcular_chunk_size_dinamico(tamanho_arquivo, numero_colunas)
+            chunk_size = self._ajustar_chunk_size_para_memoria(chunk_size, numero_colunas)
+            
+            logger.info(f"Processamento em chunks: {chunk_size:,} linhas por chunk")
+            
+            # Listas para acumular resultados
+            dataframes_chunks = []
+            movimentacoes_total = []
+            saldos_mensais_total = []
+            indicadores_total = []
+            
+            chunk_num = 0
+            linhas_processadas = 0
+            
+            # Ler arquivo em chunks usando scan_csv para eficiência
+            try:
+                # Usar lazy frame para leitura eficiente
+                lazy_df = pl.scan_csv(
                     arquivo,
                     separator=separador,
                     encoding=encoding,
                     has_header=True,
                     ignore_errors=True,
-                    truncate_ragged_lines=True,
-                    low_memory=False,  # Melhor para arquivos grandes
-                    rechunk=True  # Otimizar chunks
+                    truncate_ragged_lines=True
                 )
                 
-                logger.info(f"Arquivo lido: {df.shape[0]:,} registros, {df.shape[1]} colunas")
+                # Obter total de linhas para barra de progresso
+                total_linhas = lazy_df.select(pl.count()).collect().item()
+                num_chunks = (total_linhas + chunk_size - 1) // chunk_size
                 
-                # Verificar se DataFrame não está vazio
-                if df.shape[0] == 0:
-                    logger.warning(f"Arquivo {arquivo.name} está vazio")
-                    return df, [], [], []
+                logger.info(f"Total de linhas: {total_linhas:,}, chunks: {num_chunks}")
                 
-                # Padronizar colunas com sistema flexível
-                df = self._padronizar_colunas(df, arquivo)
+                # Processar cada chunk
+                from tqdm import tqdm
                 
-                # Filtrar campos se especificado
-                if campos_selecionados:
-                    campos_disponiveis = [c for c in campos_selecionados if c in df.columns]
-                    if campos_disponiveis:
-                        df = df.select(campos_disponiveis)
-                        logger.debug(f"Campos filtrados: {len(campos_disponiveis)} de {len(campos_selecionados)}")
+                with tqdm(total=num_chunks, desc="Processando chunks", unit="chunk") as pbar:
+                    
+                    for chunk_start in range(0, total_linhas, chunk_size):
+                        chunk_end = min(chunk_start + chunk_size, total_linhas)
+                        chunk_num += 1
+                        
+                        # Ler chunk específico
+                        df_chunk = lazy_df.slice(chunk_start, chunk_size).collect()
+                        
+                        if df_chunk.shape[0] == 0:
+                            continue
+                        
+                        # Processar chunk
+                        df_processado = self._processar_chunk_individual(
+                            df_chunk, arquivo, ano, mes, campos_selecionados
+                        )
+                        
+                        if df_processado.shape[0] > 0:
+                            dataframes_chunks.append(df_processado)
+                            
+                            # Converter chunk para entidades
+                            try:
+                                mov_chunk = self._dataframe_para_movimentacoes(df_processado, ano, mes)
+                                saldos_chunk = self._calcular_saldos_mensais(df_processado, ano, mes)
+                                ind_chunk = self._gerar_indicadores(df_processado, ano, mes)
+                                
+                                movimentacoes_total.extend(mov_chunk)
+                                saldos_mensais_total.extend(saldos_chunk)
+                                indicadores_total.extend(ind_chunk)
+                                
+                            except Exception as e:
+                                logger.warning(f"Erro ao processar entidades do chunk {chunk_num}: {e}")
+                        
+                        linhas_processadas += df_chunk.shape[0]
+                        pbar.update(1)
+                        pbar.set_postfix({
+                            'linhas': f"{linhas_processadas:,}",
+                            'chunk': f"{chunk_num}/{num_chunks}"
+                        })
+                
+                # Consolidar todos os chunks em um DataFrame final
+                if dataframes_chunks:
+                    logger.info(f"Consolidando {len(dataframes_chunks)} chunks...")
+                    df_final = pl.concat(dataframes_chunks, how="vertical")
+                    
+                    # Validar integridade dos dados consolidados
+                    if self.validar_integridade_dados(df_final):
+                        logger.info("✅ Dados consolidados validados com sucesso")
                     else:
-                        logger.warning("Nenhum campo selecionado encontrado no arquivo")
-                
-                # Aplicar tipos de dados com detecção automática
-                df = self._aplicar_tipos_dados(df)
-                
-                # Adicionar colunas de controle
-                df = df.with_columns([
-                    pl.lit(f"{ano}-{mes:02d}").alias("ANO_MES"),
-                    pl.lit(ano).alias("ANO"),
-                    pl.lit(mes).alias("MES")
-                ])
-                
-                # Validar integridade dos dados
-                if self.validar_integridade_dados(df):
-                    logger.info("✅ Dados validados com sucesso")
+                        logger.warning("⚠️  Alertas encontrados na validação dos dados consolidados")
+                    
+                    logger.info(f"Processamento em chunks concluído: {df_final.shape[0]:,} registros")
+                    
+                    return df_final, movimentacoes_total, saldos_mensais_total, indicadores_total
                 else:
-                    logger.warning("⚠️  Alertas encontrados na validação")
-                
-                # Converter para entidades com tratamento de erro
-                try:
-                    movimentacoes = self._dataframe_para_movimentacoes(df, ano, mes)
-                    saldos_mensais = self._calcular_saldos_mensais(df, ano, mes)
-                    indicadores = self._gerar_indicadores(df, ano, mes)
+                    logger.warning("Nenhum chunk válido processado")
+                    return pl.DataFrame(), [], [], []
                     
-                    logger.debug(f"Entidades criadas: {len(movimentacoes)} movimentações, "
-                               f"{len(saldos_mensais)} saldos, {len(indicadores)} indicadores")
-                    
-                except Exception as e:
-                    logger.error(f"Erro ao converter entidades: {e}")
-                    # Retornar listas vazias em caso de erro
-                    movimentacoes, saldos_mensais, indicadores = [], [], []
-                
-                logger.debug(f"Processamento de {arquivo.name} concluído")
-                
-                return df, movimentacoes, saldos_mensais, indicadores
-                
             except Exception as e:
-                logger.error(f"❌ Erro ao processar arquivo: {e}", exc_info=True)
-                raise
+                logger.error(f"Erro no processamento em chunks: {e}")
+                # Fallback para processamento direto
+                logger.info("Tentando processamento direto como fallback...")
+                return self._processar_arquivo_direto(arquivo, ano, mes, encoding, separador, campos_selecionados)
+                
+        except Exception as e:
+            logger.error(f"❌ Erro crítico no processamento em chunks: {e}", exc_info=True)
+            raise
+    
+    def _processar_chunk_individual(self, df_chunk: pl.DataFrame, arquivo: Path, 
+                                  ano: int, mes: int,
+                                  campos_selecionados: Optional[List[str]] = None) -> pl.DataFrame:
+        """
+        Processa um chunk individual aplicando todas as transformações necessárias
+        """
+        try:
+            # Padronizar colunas
+            df_processado = self._padronizar_colunas(df_chunk, arquivo)
+            
+            # Filtrar campos se especificado
+            if campos_selecionados:
+                campos_disponiveis = [c for c in campos_selecionados if c in df_processado.columns]
+                if campos_disponiveis:
+                    df_processado = df_processado.select(campos_disponiveis)
+            
+            # Aplicar tipos de dados
+            df_processado = self._aplicar_tipos_dados(df_processado)
+            
+            # Adicionar colunas de controle
+            df_processado = df_processado.with_columns([
+                pl.lit(f"{ano}-{mes:02d}").alias("ANO_MES"),
+                pl.lit(ano).alias("ANO"),
+                pl.lit(mes).alias("MES")
+            ])
+            
+            return df_processado
+            
+        except Exception as e:
+            logger.error(f"Erro ao processar chunk individual: {e}")
+            return pl.DataFrame()
     
     def _dataframe_para_movimentacoes(self, df: pl.DataFrame, ano: int, mes: int) -> List[Movimentacao]:
         """
