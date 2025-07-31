@@ -57,26 +57,116 @@ CONFIG_ARQUIVO = {
     'max_linhas_deteccao': 10000,
 }
 
-# Campos númericos para validação
-CAMPOS_NUMERICOS = ['ADMITIDOS', 'DESLIGADOS', 'SALDO']
+# ============================================================================
+# CONFIGURAÇÕES DE DADOS CAGED
+# ============================================================================
 
-# Schema flexível - será aplicado dinamicamente
-SCHEMA_CAGED_BASE = {
-    'COMPETENCIA': pl.Utf8,
-    'REGIAO': pl.Utf8,
-    'UF': pl.Utf8,
-    'MUNICIPIO': pl.Utf8,
-    'CNAE_2_0_CLASSE': pl.Utf8,
-    'CNAE_2_0_SUBCLASSE': pl.Utf8,
-    'ADMITIDOS': pl.Int64,
-    'DESLIGADOS': pl.Int64,
-    'SALDO': pl.Int64,
-    'SEXO': pl.Utf8,
-    'FAIXA_ETARIA': pl.Utf8,
-    'ESCOLARIDADE': pl.Utf8,
-    'CBO_2002': pl.Utf8,
-    'TIPO_MOVIMENTACAO': pl.Utf8,
-    'TIPO_DEFICIENCIA': pl.Utf8
+# Campos essenciais do CAGED (para validação)
+CAMPOS_ESSENCIAIS_CAGED = {
+    'competencia': ['COMPETENCIA', 'COMP', 'ANO_MES', 'PERIODO'],
+    'regiao': ['REGIAO', 'REG', 'REGION'],
+    'uf': ['UF', 'ESTADO', 'SIGLA_UF'],
+    'municipio': ['MUNICIPIO', 'MUNIC', 'CIDADE'],
+    'cnae_classe': ['CNAE_2_0_CLASSE', 'CNAE_CLASSE', 'CLASSE_CNAE'],
+    'cnae_subclasse': ['CNAE_2_0_SUBCLASSE', 'CNAE_SUBCLASSE', 'SUBCLASSE_CNAE'],
+    'admitidos': ['ADMITIDOS', 'ADMISSOES', 'ADMIT'],
+    'desligados': ['DESLIGADOS', 'DESLIG', 'DEMISSOES'],
+    'saldo': ['SALDO', 'SALDO_MOVIMENTACAO', 'VARIACAO']
+}
+
+# Campos opcionais do CAGED (podem estar presentes)
+CAMPOS_OPCIONAIS_CAGED = {
+    'sexo': ['SEXO', 'GENERO'],
+    'faixa_etaria': ['FAIXA_ETARIA', 'IDADE', 'FAIXA_IDADE'],
+    'escolaridade': ['ESCOLARIDADE', 'GRAU_INSTRUCAO', 'EDUCACAO'],
+    'cbo': ['CBO_2002', 'CBO', 'OCUPACAO'],
+    'tipo_movimentacao': ['TIPO_MOVIMENTACAO', 'TIPO_MOV', 'MOVIMENTACAO'],
+    'tipo_deficiencia': ['TIPO_DEFICIENCIA', 'DEFICIENCIA', 'PCD']
+}
+
+# Campos númericos para validação e conversão
+CAMPOS_NUMERICOS = ['ADMITIDOS', 'DESLIGADOS', 'SALDO']
+PADROES_NUMERICOS = ['ADMITIDO', 'DESLIGADO', 'SALDO', 'QUANTIDADE', 'TOTAL', 'VALOR']
+
+# Schema base flexível - expandido dinamicamente
+SCHEMA_TIPOS_BASE = {
+    # Campos de texto
+    'texto': pl.Utf8,
+    # Campos numéricos inteiros
+    'numerico_int': pl.Int64,
+    # Campos numéricos decimais
+    'numerico_float': pl.Float64,
+    # Campos de data/tempo
+    'data': pl.Utf8,  # Mantemos como string para flexibilidade
+    'temporal': pl.Utf8,
+    # Campos categóricos
+    'categorico': pl.Categorical,
+    # Campos booleanos
+    'booleano': pl.Boolean,
+    # Campos de identificação (grandes números)
+    'identificacao': pl.Utf8
+}
+
+# Mapeamento avançado de tipos por padrão de nome
+MAPEAMENTO_TIPOS_AUTOMATICO = {
+    # Campos numéricos inteiros
+    'numerico_int': [
+        'ADMITIDOS', 'DESLIGADOS', 'SALDO', 'QUANTIDADE', 'TOTAL', 'COUNT',
+        'ADMIT', 'DESLIG', 'QTD', 'NUM', 'ANO', 'MES', 'IDADE'
+    ],
+    # Campos numéricos decimais
+    'numerico_float': [
+        'VALOR', 'SALARIO', 'REMUNERACAO', 'PERCENTUAL', 'TAXA', 'INDICE',
+        'MEDIA', 'VARIACAO', 'PROPORCAO'
+    ],
+    # Campos de identificação (texto)
+    'identificacao': [
+        'CNPJ', 'CPF', 'CODIGO', 'ID', 'CHAVE', 'REGISTRO', 'DOCUMENTO',
+        'MATRICULA', 'PIS', 'PASEP'
+    ],
+    # Campos de data/tempo
+    'temporal': [
+        'DATA', 'COMPETENCIA', 'PERIODO', 'TIMESTAMP', 'INICIO', 'FIM',
+        'ADMISSAO', 'DEMISSAO', 'NASCIMENTO'
+    ],
+    # Campos geográficos
+    'geografico': [
+        'UF', 'ESTADO', 'MUNICIPIO', 'CIDADE', 'REGIAO', 'CEP', 'ENDERECO',
+        'BAIRRO', 'LOGRADOURO', 'PAIS'
+    ],
+    # Campos de classificação categórica
+    'categorico': [
+        'CNAE', 'CBO', 'TIPO', 'CATEGORIA', 'CLASSE', 'SUBCLASSE', 'GRUPO',
+        'SEXO', 'GENERO', 'ESCOLARIDADE', 'RACA', 'COR', 'DEFICIENCIA',
+        'FAIXA_ETARIA', 'FAIXA_SALARIAL', 'PORTE_EMPRESA'
+    ],
+    # Campos booleanos
+    'booleano': [
+        'ATIVO', 'INATIVO', 'VALIDO', 'INVALIDO', 'PRINCIPAL', 'SECUNDARIO',
+        'PUBLICO', 'PRIVADO', 'FORMAL', 'INFORMAL'
+    ]
+}
+
+# Configurações de validação de integridade
+VALIDACOES_INTEGRIDADE = {
+    # Validações matemáticas
+    'saldo_movimentacao': {
+        'formula': 'ADMITIDOS - DESLIGADOS = SALDO',
+        'tolerancia_percentual': 5.0,
+        'obrigatorio': True
+    },
+    # Validações de consistência temporal
+    'consistencia_temporal': {
+        'campos_data': ['COMPETENCIA', 'DATA_ADMISSAO', 'DATA_DEMISSAO'],
+        'formato_esperado': 'YYYY-MM',
+        'obrigatorio': False
+    },
+    # Validações de domínio
+    'dominios_validos': {
+        'UF': ['AC', 'AL', 'AP', 'AM', 'BA', 'CE', 'DF', 'ES', 'GO', 'MA', 'MT', 'MS', 'MG', 'PA', 'PB', 'PR', 'PE', 'PI', 'RJ', 'RN', 'RS', 'RO', 'RR', 'SC', 'SP', 'SE', 'TO'],
+        'SEXO': ['M', 'F', 'MASCULINO', 'FEMININO', '1', '2'],
+        'obrigatorio': False
+    }
 }
 
 # Configurações de logging estruturado
@@ -155,6 +245,215 @@ class ConversorParquetCaged:
         logger.info(f"Destino: {self.diretorio_destino}")
         logger.info(f"Paralelismo: {self.habilitar_paralelismo} (workers: {self.max_workers})")
         logger.info(f"Chunk size: {self.chunk_size}")
+    
+    def _criar_mapeamento_dinamico(self, colunas: List[str]) -> Dict[str, str]:
+        """
+        Cria mapeamento dinâmico de colunas baseado nos padrões CAGED
+        
+        Args:
+            colunas: Lista de nomes de colunas originais
+            
+        Returns:
+            Dicionário de mapeamento {coluna_original: coluna_padronizada}
+        """
+        from src.util.utilitarios import padronizar_nome_coluna
+        
+        mapeamento = {}
+        colunas_padronizadas = set()
+        
+        for coluna_original in colunas:
+            # Padronizar nome básico
+            coluna_limpa = padronizar_nome_coluna(coluna_original)
+            
+            # Verificar se corresponde a algum campo essencial
+            campo_mapeado = None
+            for campo_essencial, variacoes in CAMPOS_ESSENCIAIS_CAGED.items():
+                if self._colunas_similares(coluna_limpa, variacoes):
+                    campo_mapeado = campo_essencial.upper()
+                    break
+            
+            # Se não encontrou nos essenciais, verificar opcionais
+            if not campo_mapeado:
+                for campo_opcional, variacoes in CAMPOS_OPCIONAIS_CAGED.items():
+                    if self._colunas_similares(coluna_limpa, variacoes):
+                        campo_mapeado = campo_opcional.upper()
+                        break
+            
+            # Se ainda não encontrou, usar padronização básica
+            if not campo_mapeado:
+                campo_mapeado = coluna_limpa
+            
+            # Evitar duplicatas
+            if campo_mapeado in colunas_padronizadas:
+                contador = 1
+                while f"{campo_mapeado}_{contador}" in colunas_padronizadas:
+                    contador += 1
+                campo_mapeado = f"{campo_mapeado}_{contador}"
+            
+            mapeamento[coluna_original] = campo_mapeado
+            colunas_padronizadas.add(campo_mapeado)
+        
+        return mapeamento
+    
+    def _colunas_similares(self, coluna: str, variacoes: List[str]) -> bool:
+        """
+        Verifica se uma coluna é similar a alguma das variações
+        
+        Args:
+            coluna: Nome da coluna
+            variacoes: Lista de variações possíveis
+            
+        Returns:
+            True se a coluna é similar a alguma variação
+        """
+        coluna_norm = coluna.upper().replace('_', '').replace(' ', '')
+        
+        for variacao in variacoes:
+            variacao_norm = variacao.upper().replace('_', '').replace(' ', '')
+            
+            # Verificação exata
+            if coluna_norm == variacao_norm:
+                return True
+            
+            # Verificação de contenção
+            if coluna_norm in variacao_norm or variacao_norm in coluna_norm:
+                return True
+        
+        return False
+    
+    def _validar_campos_essenciais(self, colunas: List[str]) -> Dict[str, Any]:
+        """
+        Valida se os campos essenciais estão presentes nas colunas
+        
+        Args:
+            colunas: Lista de nomes de colunas
+            
+        Returns:
+            Dicionário com resultado da validação
+        """
+        campos_encontrados = []
+        campos_ausentes = []
+        
+        for campo_essencial, variacoes in CAMPOS_ESSENCIAIS_CAGED.items():
+            encontrado = False
+            for coluna in colunas:
+                if self._colunas_similares(coluna, variacoes):
+                    campos_encontrados.append(campo_essencial)
+                    encontrado = True
+                    break
+            
+            if not encontrado:
+                campos_ausentes.append(campo_essencial)
+        
+        return {
+            'valido': len(campos_ausentes) == 0,
+            'campos_encontrados': campos_encontrados,
+            'campos_ausentes': campos_ausentes,
+            'total_essenciais': len(CAMPOS_ESSENCIAIS_CAGED),
+            'percentual_encontrado': len(campos_encontrados) / len(CAMPOS_ESSENCIAIS_CAGED) * 100
+        }
+    
+    def _detectar_tipo_coluna(self, nome_coluna: str, amostra_dados: Optional[pl.Series] = None) -> pl.DataType:
+        """
+        Detecta automaticamente o tipo de dados de uma coluna baseado no nome e amostra
+        
+        Args:
+            nome_coluna: Nome da coluna
+            amostra_dados: Amostra dos dados da coluna para análise
+            
+        Returns:
+            Tipo de dados Polars apropriado
+        """
+        nome_upper = nome_coluna.upper()
+        
+        # Verificar padrões numéricos específicos primeiro
+        for padrao in PADROES_NUMERICOS:
+            if padrao in nome_upper:
+                tipo_sugerido = pl.Int64
+                if amostra_dados is not None:
+                    return self._validar_tipo_com_amostra(tipo_sugerido, amostra_dados, nome_coluna)
+                return tipo_sugerido
+        
+        # Verificar mapeamento automático expandido de tipos
+        for categoria, padroes in MAPEAMENTO_TIPOS_AUTOMATICO.items():
+            for padrao in padroes:
+                if padrao in nome_upper:
+                    tipo_base = SCHEMA_TIPOS_BASE.get(categoria, pl.Utf8)
+                    
+                    # Se temos amostra de dados, validar o tipo
+                    if amostra_dados is not None:
+                        return self._validar_tipo_com_amostra(tipo_base, amostra_dados, nome_coluna)
+                    
+                    return tipo_base
+        
+        # Padrões específicos por regex com análise de amostra
+        if re.search(r'(CNPJ|CPF|CEP|CODIGO|PIS|PASEP)', nome_upper):
+            return pl.Utf8  # IDs sempre como string
+        elif re.search(r'(VALOR|SALARIO|REMUNERACAO|PERCENTUAL|TAXA)', nome_upper):
+            tipo_sugerido = pl.Float64
+        elif re.search(r'(DATA|PERIODO|COMPETENCIA)', nome_upper):
+            tipo_sugerido = pl.Utf8
+        elif re.search(r'(QUANTIDADE|TOTAL|COUNT|SALDO)', nome_upper):
+            tipo_sugerido = pl.Int64
+        else:
+            tipo_sugerido = pl.Utf8
+            
+        # Validar com amostra se disponível
+        if amostra_dados is not None:
+            return self._validar_tipo_com_amostra(tipo_sugerido, amostra_dados, nome_coluna)
+            
+        return tipo_sugerido
+    
+    def _validar_tipo_com_amostra(self, tipo_sugerido: pl.DataType, 
+                                  amostra: pl.Series, nome_coluna: str) -> pl.DataType:
+        """
+        Valida o tipo sugerido com uma amostra dos dados
+        
+        Args:
+            tipo_sugerido: Tipo inicialmente sugerido
+            amostra: Amostra dos dados
+            nome_coluna: Nome da coluna
+            
+        Returns:
+            Tipo validado
+        """
+        try:
+            # Remover valores nulos para análise
+            amostra_limpa = amostra.drop_nulls()
+            
+            if len(amostra_limpa) == 0:
+                return pl.Utf8  # Se só tem nulos, usar string
+            
+            # Tentar conversão para o tipo sugerido
+            try:
+                amostra_limpa.cast(tipo_sugerido, strict=True)
+                return tipo_sugerido
+            except:
+                # Se falhou, tentar tipos alternativos
+                if tipo_sugerido == pl.Int64:
+                    # Tentar Float64 se Int64 falhou
+                    try:
+                        amostra_limpa.cast(pl.Float64, strict=True)
+                        logger.debug(f"Coluna {nome_coluna}: Int64 → Float64 (valores decimais detectados)")
+                        return pl.Float64
+                    except:
+                        pass
+                elif tipo_sugerido == pl.Float64:
+                    # Tentar Int64 se Float64 falhou mas parece numérico
+                    try:
+                        amostra_limpa.cast(pl.Int64, strict=True)
+                        logger.debug(f"Coluna {nome_coluna}: Float64 → Int64 (valores inteiros detectados)")
+                        return pl.Int64
+                    except:
+                        pass
+                
+                # Se nada funcionou, usar string
+                logger.debug(f"Coluna {nome_coluna}: {tipo_sugerido} → Utf8 (conversão falhou)")
+                return pl.Utf8
+                
+        except Exception as e:
+            logger.warning(f"Erro na validação de tipo para {nome_coluna}: {e}")
+            return pl.Utf8
         
     def detectar_encoding(self, arquivo: Path) -> str:
         """
@@ -580,7 +879,7 @@ class ConversorParquetCaged:
     
     def _padronizar_colunas(self, df: pl.DataFrame, arquivo_origem: Optional[Path] = None) -> pl.DataFrame:
         """
-        Padroniza nomes das colunas usando sistema flexível
+        Padroniza nomes das colunas usando sistema dinâmico flexível
         
         Args:
             df: DataFrame original
@@ -595,18 +894,19 @@ class ConversorParquetCaged:
             mapeamento = self._cache_mapeamentos[cache_key]
             logger.debug(f"Usando mapeamento em cache para {arquivo_origem.name}")
         else:
-            # Criar mapeamento flexível
-            mapeamento = criar_mapeamento_caged_flexivel(df.columns)
+            # Criar mapeamento dinâmico baseado nos padrões CAGED
+            mapeamento = self._criar_mapeamento_dinamico(df.columns)
             
-            # Validar colunas
+            # Validar colunas usando sistema flexível
             colunas_invalidas = obter_colunas_invalidas(df.columns)
             if colunas_invalidas:
                 logger.warning(f"Colunas inválidas encontradas: {len(colunas_invalidas)}")
             
-            # Validar campos essenciais
-            validacao = validar_campos_caged(df.columns)
+            # Validar campos essenciais usando novo sistema
+            validacao = self._validar_campos_essenciais(df.columns)
             if not validacao['valido']:
                 logger.warning(f"Campos essenciais ausentes: {validacao['campos_ausentes']}")
+                logger.info(f"Campos encontrados: {validacao['campos_encontrados']}")
             
             # Salvar no cache
             if cache_key:
@@ -625,7 +925,7 @@ class ConversorParquetCaged:
     
     def _aplicar_tipos_dados(self, df: pl.DataFrame) -> pl.DataFrame:
         """
-        Aplica tipos de dados corretos às colunas com detecção automática
+        Aplica tipos de dados corretos às colunas com detecção automática avançada
         
         Args:
             df: DataFrame original
@@ -638,61 +938,91 @@ class ConversorParquetCaged:
             schema_aplicado = {}
             
             for coluna in df.columns:
-                # Verificar se coluna está no schema base
-                if coluna in SCHEMA_CAGED_BASE:
-                    tipo_esperado = SCHEMA_CAGED_BASE[coluna]
-                    schema_aplicado[coluna] = tipo_esperado
-                    
-                    if tipo_esperado == pl.Int64:
-                        # Conversão robusta para inteiros
-                        conversoes.append(
-                            pl.col(coluna)
-                            .cast(pl.Utf8, strict=False)  # Primeiro para string
-                            .str.replace_all(r'[^\d-]', '')  # Limpar caracteres
-                            .str.replace(r'^-+$', '0')  # Tratar apenas sinais
-                            .str.replace(r'^$', '0')  # Tratar vazios
-                            .cast(pl.Int64, strict=False)
-                            .fill_null(0)
-                            .alias(coluna)
+                # Obter amostra dos dados para análise
+                amostra = df.select(pl.col(coluna)).to_series().head(1000)
+                
+                # Detectar tipo automaticamente com amostra
+                tipo_detectado = self._detectar_tipo_coluna(coluna, amostra)
+                schema_aplicado[coluna] = tipo_detectado
+                
+                if tipo_detectado == pl.Int64:
+                    # Conversão robusta para inteiros
+                    conversoes.append(
+                        pl.col(coluna)
+                        .cast(pl.Utf8, strict=False)  # Primeiro para string
+                        .str.replace_all(r'[^\d-]', '')  # Limpar caracteres
+                        .str.replace(r'^-+$', '0')  # Tratar apenas sinais
+                        .str.replace(r'^$', '0')  # Tratar vazios
+                        .str.replace(r'^0+$', '0')  # Normalizar zeros
+                        .cast(pl.Int64, strict=False)
+                        .fill_null(0)
+                        .alias(coluna)
+                    )
+                elif tipo_detectado == pl.Float64:
+                    # Conversão para decimais
+                    conversoes.append(
+                        pl.col(coluna)
+                        .cast(pl.Utf8, strict=False)
+                        .str.replace_all(r'[^\d.,-]', '')  # Manter pontos e vírgulas
+                        .str.replace(',', '.')  # Padronizar decimal
+                        .str.replace(r'^$', '0')
+                        .cast(pl.Float64, strict=False)
+                        .fill_null(0.0)
+                        .alias(coluna)
+                    )
+                elif tipo_detectado == pl.Categorical:
+                    # Conversão para categórico
+                    conversoes.append(
+                        pl.col(coluna)
+                        .cast(pl.Utf8, strict=False)
+                        .fill_null("")
+                        .str.strip()
+                        .cast(pl.Categorical)
+                        .alias(coluna)
+                    )
+                elif tipo_detectado == pl.Boolean:
+                    # Conversão para booleano
+                    conversoes.append(
+                        pl.col(coluna)
+                        .cast(pl.Utf8, strict=False)
+                        .str.to_lowercase()
+                        .str.strip()
+                        .map_elements(
+                            lambda x: True if x in ['true', '1', 'sim', 's', 'yes', 'y'] 
+                                     else False if x in ['false', '0', 'nao', 'n', 'no'] 
+                                     else None,
+                            return_dtype=pl.Boolean
                         )
-                    elif tipo_esperado == pl.Utf8:
-                        # Conversão para string
-                        conversoes.append(
-                            pl.col(coluna)
-                            .cast(pl.Utf8, strict=False)
-                            .fill_null("")
-                            .str.strip()  # Remover espaços
-                            .alias(coluna)
-                        )
-                else:
-                    # Detecção automática de tipo para colunas não mapeadas
-                    if coluna in CAMPOS_NUMERICOS or any(num_field in coluna.upper() 
-                                                        for num_field in ['ADMITIDO', 'DESLIGADO', 'SALDO', 'QUANTIDADE']):
-                        # Tratar como numérico
-                        conversoes.append(
-                            pl.col(coluna)
-                            .cast(pl.Utf8, strict=False)
-                            .str.replace_all(r'[^\d-]', '')
-                            .str.replace(r'^$', '0')
-                            .cast(pl.Int64, strict=False)
-                            .fill_null(0)
-                            .alias(coluna)
-                        )
-                        schema_aplicado[coluna] = pl.Int64
-                    else:
-                        # Tratar como string
-                        conversoes.append(
-                            pl.col(coluna)
-                            .cast(pl.Utf8, strict=False)
-                            .fill_null("")
-                            .str.strip()
-                            .alias(coluna)
-                        )
-                        schema_aplicado[coluna] = pl.Utf8
+                        .fill_null(False)
+                        .alias(coluna)
+                    )
+                else:  # pl.Utf8 (padrão)
+                    # Conversão para string
+                    conversoes.append(
+                        pl.col(coluna)
+                        .cast(pl.Utf8, strict=False)
+                        .fill_null("")
+                        .str.strip()  # Remover espaços
+                        .alias(coluna)
+                    )
             
             if conversoes:
                 df = df.with_columns(conversoes)
                 logger.debug(f"Tipos aplicados: {len(schema_aplicado)} colunas convertidas")
+                
+                # Log de tipos detectados para debug
+                tipos_resumo = {}
+                for col, tipo in schema_aplicado.items():
+                    tipo_nome = str(tipo).split('.')[-1]
+                    tipos_resumo[tipo_nome] = tipos_resumo.get(tipo_nome, 0) + 1
+                
+                logger.info(f"Resumo de tipos aplicados: {tipos_resumo}")
+                
+                # Log detalhado de algumas colunas importantes
+                colunas_importantes = ['ADMITIDOS', 'DESLIGADOS', 'SALDO', 'CNAE', 'UF']
+                for col in colunas_importantes:
+                    if col in schema_aplicado:
+                        logger.debug(f"Coluna {col}: {schema_aplicado[col]}")
             
             return df
             
@@ -700,52 +1030,199 @@ class ConversorParquetCaged:
             logger.error(f"Erro ao aplicar tipos de dados: {e}")
             return df
     
-    def validar_integridade_dados(self, df: pl.DataFrame) -> bool:
+    def validar_integridade_dados(self, df: pl.DataFrame) -> Dict[str, Any]:
         """
-        Valida integridade dos dados CAGED
-        Verifica se: Admitidos - Desligados = Saldo
+        Valida integridade dos dados CAGED com múltiplas verificações
         
         Args:
             df: DataFrame a validar
             
         Returns:
-            bool: True se dados são consistentes
+            Dict com resultados detalhados da validação
         """
+        resultado_validacao = {
+            'valido_geral': True,
+            'validacoes': {},
+            'alertas': [],
+            'erros': []
+        }
+        
         try:
-            if not all(col in df.columns for col in ['ADMITIDOS', 'DESLIGADOS', 'SALDO']):
-                print("⚠️  Colunas de movimentação não encontradas para validação")
-                return False
+            # 1. Validação de saldo de movimentação
+            resultado_saldo = self._validar_saldo_movimentacao(df)
+            resultado_validacao['validacoes']['saldo_movimentacao'] = resultado_saldo
             
-            # Calcular saldo esperado
+            if not resultado_saldo['valido']:
+                resultado_validacao['valido_geral'] = False
+                resultado_validacao['alertas'].append(resultado_saldo['mensagem'])
+            
+            # 2. Validação de consistência temporal
+            resultado_temporal = self._validar_consistencia_temporal(df)
+            resultado_validacao['validacoes']['consistencia_temporal'] = resultado_temporal
+            
+            if not resultado_temporal['valido']:
+                resultado_validacao['alertas'].append(resultado_temporal['mensagem'])
+            
+            # 3. Validação de domínios válidos
+            resultado_dominios = self._validar_dominios_validos(df)
+            resultado_validacao['validacoes']['dominios_validos'] = resultado_dominios
+            
+            if not resultado_dominios['valido']:
+                resultado_validacao['alertas'].append(resultado_dominios['mensagem'])
+            
+            # 4. Validação de completude de dados
+            resultado_completude = self._validar_completude_dados(df)
+            resultado_validacao['validacoes']['completude_dados'] = resultado_completude
+            
+            if not resultado_completude['valido']:
+                resultado_validacao['alertas'].append(resultado_completude['mensagem'])
+            
+            # Log dos resultados
+            if resultado_validacao['valido_geral']:
+                logger.info("✅ Validação de integridade: APROVADA")
+            else:
+                logger.warning(f"⚠️  Validação de integridade: {len(resultado_validacao['alertas'])} alertas")
+                for alerta in resultado_validacao['alertas']:
+                    logger.warning(f"   - {alerta}")
+            
+            return resultado_validacao
+            
+        except Exception as e:
+            erro_msg = f"Erro na validação de integridade: {e}"
+            logger.error(erro_msg)
+            resultado_validacao['valido_geral'] = False
+            resultado_validacao['erros'].append(erro_msg)
+            return resultado_validacao
+    
+    def _validar_saldo_movimentacao(self, df: pl.DataFrame) -> Dict[str, Any]:
+        """Valida se Admitidos - Desligados = Saldo"""
+        config = VALIDACOES_INTEGRIDADE['saldo_movimentacao']
+        
+        if not all(col in df.columns for col in ['ADMITIDOS', 'DESLIGADOS', 'SALDO']):
+            return {
+                'valido': False,
+                'mensagem': 'Colunas de movimentação não encontradas',
+                'detalhes': 'Campos ADMITIDOS, DESLIGADOS ou SALDO ausentes'
+            }
+        
+        try:
+            # Converter para numérico e calcular saldo esperado
             df_validacao = df.with_columns([
-                (pl.col('ADMITIDOS') - pl.col('DESLIGADOS')).alias('SALDO_CALCULADO')
+                pl.col('ADMITIDOS').cast(pl.Int64, strict=False).alias('ADMITIDOS_NUM'),
+                pl.col('DESLIGADOS').cast(pl.Int64, strict=False).alias('DESLIGADOS_NUM'),
+                pl.col('SALDO').cast(pl.Int64, strict=False).alias('SALDO_NUM')
+            ]).with_columns([
+                (pl.col('ADMITIDOS_NUM') - pl.col('DESLIGADOS_NUM')).alias('SALDO_CALCULADO')
             ])
             
-            # Verificar inconsistências
+            # Verificar inconsistências (ignorar registros com valores nulos)
             inconsistencias = df_validacao.filter(
-                pl.col('SALDO') != pl.col('SALDO_CALCULADO')
+                pl.col('ADMITIDOS_NUM').is_not_null() &
+                pl.col('DESLIGADOS_NUM').is_not_null() &
+                pl.col('SALDO_NUM').is_not_null() &
+                (pl.col('SALDO_NUM') != pl.col('SALDO_CALCULADO'))
             )
             
-            total_registros = df.shape[0]
-            registros_inconsistentes = inconsistencias.shape[0]
+            # Contar registros válidos para cálculo
+            registros_validos = df_validacao.filter(
+                pl.col('ADMITIDOS_NUM').is_not_null() &
+                pl.col('DESLIGADOS_NUM').is_not_null() &
+                pl.col('SALDO_NUM').is_not_null()
+            ).shape[0]
             
-            if registros_inconsistentes > 0:
-                percentual = (registros_inconsistentes / total_registros) * 100
-                print(f"⚠️  {registros_inconsistentes}/{total_registros} registros inconsistentes ({percentual:.2f}%)")
-                
-                # Mostrar alguns exemplos
-                if registros_inconsistentes <= 5:
-                    print("📋 Exemplos de inconsistências:")
-                    print(inconsistencias.select(['ADMITIDOS', 'DESLIGADOS', 'SALDO', 'SALDO_CALCULADO']))
-                
-                return percentual < 5  # Aceitar até 5% de inconsistências
-            else:
-                print("✅ Todos os registros são consistentes (Admitidos - Desligados = Saldo)")
-                return True
-                
+            registros_inconsistentes = inconsistencias.shape[0]
+            percentual = (registros_inconsistentes / registros_validos) * 100 if registros_validos > 0 else 0
+            
+            valido = percentual <= config['tolerancia_percentual']
+            
+            return {
+                'valido': valido,
+                'percentual_inconsistente': percentual,
+                'registros_inconsistentes': registros_inconsistentes,
+                'total_registros': registros_validos,
+                'mensagem': f"Saldo: {percentual:.2f}% inconsistente (limite: {config['tolerancia_percentual']}%)",
+                'exemplos': inconsistencias.head(3).to_dicts() if registros_inconsistentes > 0 else []
+            }
+            
         except Exception as e:
-            print(f"❌ Erro na validação: {e}")
-            return False
+            return {
+                'valido': False,
+                'mensagem': f'Erro na validação de saldo: {str(e)}',
+                'detalhes': 'Falha na conversão ou cálculo dos valores'
+            }
+    
+    def _validar_consistencia_temporal(self, df: pl.DataFrame) -> Dict[str, Any]:
+        """Valida consistência de campos temporais"""
+        config = VALIDACOES_INTEGRIDADE['consistencia_temporal']
+        campos_data = [c for c in config['campos_data'] if c in df.columns]
+        
+        if not campos_data:
+            return {
+                'valido': True,
+                'mensagem': 'Nenhum campo temporal encontrado para validação',
+                'campos_validados': []
+            }
+        
+        problemas = []
+        for campo in campos_data:
+            # Verificar formato básico (YYYY-MM ou similar)
+            valores_invalidos = df.filter(
+                pl.col(campo).is_not_null() & 
+                ~pl.col(campo).str.contains(r'^\d{4}-\d{2}$|^\d{6}$|^\d{4}/\d{2}$')
+            ).shape[0]
+            
+            if valores_invalidos > 0:
+                problemas.append(f"{campo}: {valores_invalidos} valores com formato inválido")
+        
+        return {
+            'valido': len(problemas) == 0,
+            'mensagem': f"Temporal: {len(problemas)} problemas encontrados" if problemas else "Temporal: OK",
+            'campos_validados': campos_data,
+            'problemas': problemas
+        }
+    
+    def _validar_dominios_validos(self, df: pl.DataFrame) -> Dict[str, Any]:
+        """Valida se valores estão dentro de domínios esperados"""
+        config = VALIDACOES_INTEGRIDADE['dominios_validos']
+        problemas = []
+        
+        for campo, valores_validos in config.items():
+            if campo == 'obrigatorio':
+                continue
+                
+            if campo in df.columns:
+                valores_invalidos = df.filter(
+                    pl.col(campo).is_not_null() & 
+                    ~pl.col(campo).is_in(valores_validos)
+                ).shape[0]
+                
+                if valores_invalidos > 0:
+                    problemas.append(f"{campo}: {valores_invalidos} valores fora do domínio")
+        
+        return {
+            'valido': len(problemas) == 0,
+            'mensagem': f"Domínios: {len(problemas)} problemas encontrados" if problemas else "Domínios: OK",
+            'problemas': problemas
+        }
+    
+    def _validar_completude_dados(self, df: pl.DataFrame) -> Dict[str, Any]:
+        """Valida completude dos dados (valores nulos)"""
+        total_registros = df.shape[0]
+        colunas_com_problemas = []
+        
+        for coluna in df.columns:
+            nulos = df.select(pl.col(coluna).is_null().sum()).item()
+            percentual_nulos = (nulos / total_registros) * 100 if total_registros > 0 else 0
+            
+            # Alertar se mais de 50% de valores nulos
+            if percentual_nulos > 50:
+                colunas_com_problemas.append(f"{coluna}: {percentual_nulos:.1f}% nulos")
+        
+        return {
+            'valido': len(colunas_com_problemas) == 0,
+            'mensagem': f"Completude: {len(colunas_com_problemas)} colunas com muitos nulos" if colunas_com_problemas else "Completude: OK",
+            'colunas_problematicas': colunas_com_problemas
+        }
     
     def converter_mensal(self, 
                         ano: int, 
