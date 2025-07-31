@@ -50,6 +50,14 @@ CONFIG_PARALELISMO = {
     'fator_memoria_chunk': 0.8,  # Fator de segurança para memória
     'bytes_por_linha_estimado': 150,  # Estimativa de bytes por linha
     'memoria_disponivel_mb': 4096,  # Memória disponível estimada
+    # Configurações avançadas de balanceamento
+    'fator_cpu_workers': 1.5,  # Multiplicador baseado em CPU
+    'workers_min': 2,  # Mínimo de workers
+    'workers_max': 16,  # Máximo de workers
+    'balanceamento_carga': True,  # Habilitar balanceamento dinâmico
+    'prioridade_arquivos': 'tamanho',  # 'tamanho', 'nome', 'aleatorio'
+    'timeout_worker': 600,  # Timeout por worker (segundos)
+    'retry_max': 3,  # Máximo de tentativas por arquivo
 }
 
 # Configurações de encoding e separadores
@@ -304,6 +312,132 @@ class ConversorParquetCaged:
         logger.debug(f"  - Colunas: {numero_colunas}, {bytes_por_linha:.0f} bytes/linha")
         
         return int(chunk_size_final)
+    
+    def _detectar_workers_otimizado(self, num_arquivos: int, tamanho_total_mb: float) -> int:
+        """
+        Detecta o número otimizado de workers baseado no sistema e carga de trabalho
+        
+        Args:
+            num_arquivos: Número de arquivos a processar
+            tamanho_total_mb: Tamanho total dos arquivos em MB
+            
+        Returns:
+            Número otimizado de workers
+        """
+        config = CONFIG_PARALELISMO
+        
+        # Obter informações do sistema
+        cpu_count = os.cpu_count() or 1
+        memoria_disponivel = self._obter_memoria_disponivel()
+        
+        # Calcular workers baseado na CPU
+        workers_cpu = int(cpu_count * config['fator_cpu_workers'])
+        
+        # Calcular workers baseado na memória
+        memoria_por_worker = config['memoria_limite_mb']
+        workers_memoria = max(1, memoria_disponivel // memoria_por_worker)
+        
+        # Calcular workers baseado no número de arquivos
+        workers_arquivos = min(num_arquivos, config['workers_max'])
+        
+        # Calcular workers baseado no tamanho dos dados
+        if tamanho_total_mb < 100:  # Dados pequenos
+            workers_dados = min(2, workers_cpu)
+        elif tamanho_total_mb < 1000:  # Dados médios
+            workers_dados = min(4, workers_cpu)
+        else:  # Dados grandes
+            workers_dados = workers_cpu
+        
+        # Usar o menor valor para evitar sobrecarga
+        workers_otimo = min(
+            workers_cpu,
+            workers_memoria,
+            workers_arquivos,
+            workers_dados,
+            config['workers_max']
+        )
+        
+        # Aplicar limites mínimo e máximo
+        workers_final = max(config['workers_min'], workers_otimo)
+        
+        logger.info(f"Workers otimizados: {workers_final}")
+        logger.debug(f"  - CPU: {cpu_count} cores → {workers_cpu} workers")
+        logger.debug(f"  - Memória: {memoria_disponivel:,} MB → {workers_memoria} workers")
+        logger.debug(f"  - Arquivos: {num_arquivos} → {workers_arquivos} workers")
+        logger.debug(f"  - Dados: {tamanho_total_mb:.1f} MB → {workers_dados} workers")
+        
+        return workers_final
+    
+    def _ordenar_arquivos_por_prioridade(self, arquivos: List[Path]) -> List[Path]:
+        """
+        Ordena arquivos por prioridade para balanceamento de carga
+        
+        Args:
+            arquivos: Lista de arquivos
+            
+        Returns:
+            Lista de arquivos ordenada por prioridade
+        """
+        config = CONFIG_PARALELISMO
+        prioridade = config['prioridade_arquivos']
+        
+        if prioridade == 'tamanho':
+            # Ordenar por tamanho (maiores primeiro para melhor balanceamento)
+            return sorted(arquivos, key=lambda x: x.stat().st_size, reverse=True)
+        elif prioridade == 'nome':
+            # Ordenar por nome
+            return sorted(arquivos, key=lambda x: x.name)
+        elif prioridade == 'aleatorio':
+            # Ordem aleatória
+            import random
+            arquivos_copia = arquivos.copy()
+            random.shuffle(arquivos_copia)
+            return arquivos_copia
+        else:
+            # Manter ordem original
+            return arquivos
+    
+    def _calcular_balanceamento_carga(self, arquivos: List[Path], num_workers: int) -> List[List[Path]]:
+        """
+        Calcula balanceamento de carga otimizado para distribuir arquivos entre workers
+        
+        Args:
+            arquivos: Lista de arquivos
+            num_workers: Número de workers
+            
+        Returns:
+            Lista de listas, cada uma contendo arquivos para um worker
+        """
+        if not CONFIG_PARALELISMO['balanceamento_carga']:
+            # Distribuição simples
+            chunk_size = len(arquivos) // num_workers + 1
+            return [arquivos[i:i + chunk_size] for i in range(0, len(arquivos), chunk_size)]
+        
+        # Ordenar arquivos por prioridade
+        arquivos_ordenados = self._ordenar_arquivos_por_prioridade(arquivos)
+        
+        # Obter tamanhos dos arquivos
+        arquivos_com_tamanho = [(arquivo, arquivo.stat().st_size) for arquivo in arquivos_ordenados]
+        
+        # Inicializar workers com carga zero
+        workers_carga = [[] for _ in range(num_workers)]
+        workers_tamanho = [0] * num_workers
+        
+        # Distribuir arquivos usando algoritmo de menor carga
+        for arquivo, tamanho in arquivos_com_tamanho:
+            # Encontrar worker com menor carga
+            worker_menor_carga = min(range(num_workers), key=lambda i: workers_tamanho[i])
+            
+            # Atribuir arquivo ao worker
+            workers_carga[worker_menor_carga].append(arquivo)
+            workers_tamanho[worker_menor_carga] += tamanho
+        
+        # Log do balanceamento
+        for i, (arquivos_worker, tamanho_worker) in enumerate(zip(workers_carga, workers_tamanho)):
+            tamanho_mb = tamanho_worker / (1024 * 1024)
+            logger.debug(f"Worker {i+1}: {len(arquivos_worker)} arquivos, {tamanho_mb:.1f} MB")
+        
+        return workers_carga
     
     def _obter_memoria_disponivel(self) -> int:
         """
@@ -1660,19 +1794,36 @@ class ConversorParquetCaged:
     def _processar_arquivos_paralelo(self, arquivos: List[Path], ano: int, mes: int, 
                                     campos_selecionados: Optional[List[str]]) -> List[Dict[str, Any]]:
         """
-        Processa arquivos em paralelo usando ThreadPoolExecutor
+        Processa arquivos em paralelo usando ThreadPoolExecutor com balanceamento de carga
         """
         resultados = []
         
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            # Submeter tarefas
-            futures = {
-                executor.submit(self._processar_arquivo_seguro, arquivo, ano, mes, campos_selecionados): arquivo
-                for arquivo in arquivos
-            }
+        # Calcular tamanho total dos arquivos
+        tamanho_total_mb = sum(arquivo.stat().st_size for arquivo in arquivos) / (1024 * 1024)
+        
+        # Detectar número otimizado de workers
+        workers_otimizados = self._detectar_workers_otimizado(len(arquivos), tamanho_total_mb)
+        
+        # Usar o menor entre o configurado e o otimizado
+        num_workers = min(self.max_workers, workers_otimizados)
+        
+        logger.info(f"Processamento paralelo: {num_workers} workers para {len(arquivos)} arquivos ({tamanho_total_mb:.1f} MB)")
+        
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            # Submeter tarefas com retry
+            futures = {}
             
-            # Coletar resultados
-            for future in as_completed(futures, timeout=CONFIG_PARALELISMO['timeout_arquivo']):
+            for arquivo in arquivos:
+                future = executor.submit(
+                    self._processar_arquivo_com_retry, 
+                    arquivo, ano, mes, campos_selecionados
+                )
+                futures[future] = arquivo
+            
+            # Coletar resultados com timeout por worker
+            timeout_worker = CONFIG_PARALELISMO['timeout_worker']
+            
+            for future in as_completed(futures, timeout=timeout_worker):
                 arquivo = futures[future]
                 try:
                     resultado = future.result()
@@ -1697,6 +1848,60 @@ class ConversorParquetCaged:
                     })
         
         return resultados
+    
+    def _processar_arquivo_com_retry(self, arquivo: Path, ano: int, mes: int,
+                                   campos_selecionados: Optional[List[str]]) -> Dict[str, Any]:
+        """
+        Processa um arquivo com sistema de retry automático
+        
+        Args:
+            arquivo: Caminho do arquivo
+            ano: Ano de referência
+            mes: Mês de referência
+            campos_selecionados: Campos específicos para processar
+            
+        Returns:
+            Resultado do processamento
+        """
+        config = CONFIG_PARALELISMO
+        max_tentativas = config['retry_max']
+        
+        for tentativa in range(1, max_tentativas + 1):
+            try:
+                resultado = self._processar_arquivo_seguro(arquivo, ano, mes, campos_selecionados)
+                
+                if resultado['sucesso'] or tentativa == max_tentativas:
+                    if tentativa > 1:
+                        logger.info(f"✅ {arquivo.name} processado na tentativa {tentativa}")
+                    return resultado
+                else:
+                    logger.warning(f"⚠️  Tentativa {tentativa} falhou para {arquivo.name}: {resultado['erro']}")
+                    time.sleep(tentativa * 0.5)  # Backoff exponencial
+                    
+            except Exception as e:
+                if tentativa == max_tentativas:
+                    logger.error(f"❌ Todas as tentativas falharam para {arquivo.name}: {e}")
+                    return {
+                        'sucesso': False,
+                        'erro': f"Falha após {max_tentativas} tentativas: {str(e)}",
+                        'df': None,
+                        'movimentacoes': [],
+                        'saldos': [],
+                        'indicadores': []
+                    }
+                else:
+                    logger.warning(f"⚠️  Tentativa {tentativa} com erro para {arquivo.name}: {e}")
+                    time.sleep(tentativa * 0.5)
+        
+        # Nunca deveria chegar aqui, mas por segurança
+        return {
+            'sucesso': False,
+            'erro': 'Erro inesperado no sistema de retry',
+            'df': None,
+            'movimentacoes': [],
+            'saldos': [],
+            'indicadores': []
+        }
     
     def _processar_arquivos_sequencial(self, arquivos: List[Path], ano: int, mes: int,
                                       campos_selecionados: Optional[List[str]]) -> List[Dict[str, Any]]:
