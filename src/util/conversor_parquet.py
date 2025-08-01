@@ -1705,7 +1705,7 @@ class ConversorParquetCaged:
     
     def _dataframe_para_movimentacoes(self, df: pl.DataFrame, ano: int, mes: int) -> List[Movimentacao]:
         """
-        Converte DataFrame em lista de objetos Movimentacao
+        Converte DataFrame em lista de objetos Movimentacao - OTIMIZADO (Item 5.3)
         
         Args:
             df: DataFrame com dados CAGED
@@ -1715,98 +1715,262 @@ class ConversorParquetCaged:
         Returns:
             List[Movimentacao]: Lista de movimentações
         """
-        with self.medidor.etapa("Conversão para Movimentações"):
+        with self.medidor.etapa("Conversão Otimizada para Movimentações"):
             movimentacoes = []
             competencia = f"{ano}-{mes:02d}"
+            total_registros = df.shape[0]
             
-            # Mapear campos do DataFrame para a entidade
-            for row in df.iter_rows(named=True):
-                self.contador_entidades += 1
-                
-                # Determinar tipo de movimentação baseado nos campos disponíveis
-                tipo_movimentacao = self._determinar_tipo_movimentacao(row)
-                
-                # Extrair CPF se disponível
-                cpf = row.get('CPF', '') or row.get('CPF_TRABALHADOR', '') or ''
-                
-                # Extrair CNPJ se disponível
-                cnpj = row.get('CNPJ', '') or row.get('CNPJ_CEI', '') or ''
-                
-                movimentacao = Movimentacao(
-                    id=self.contador_entidades,
-                    cnpj=cnpj,
-                    cpf=cpf,
-                    competencia=competencia,
-                    tipo_movimentacao=tipo_movimentacao,
-                    data_movimentacao=self._extrair_data_movimentacao(row)
+            # Validação prévia de tipos de entidade
+            validacao_tipos = self._validar_tipos_entidade_movimentacao(df)
+            if not validacao_tipos['valido']:
+                logger.warning(f"⚠️ Problemas na validação de tipos: {validacao_tipos['problemas']}")
+            
+            # Otimização: Pré-mapear colunas para evitar busca repetitiva
+            mapeamento_colunas = self._criar_mapeamento_colunas_entidade(df.columns)
+            
+            # Processamento em lotes para melhor performance
+            batch_size = min(10000, max(1000, total_registros // 10))
+            
+            logger.info(f"🔄 Processando {total_registros:,} registros em lotes de {batch_size:,}")
+            
+            for i in range(0, total_registros, batch_size):
+                batch_df = df.slice(i, batch_size)
+                batch_movimentacoes = self._processar_lote_movimentacoes(
+                    batch_df, competencia, mapeamento_colunas
                 )
+                movimentacoes.extend(batch_movimentacoes)
                 
-                movimentacoes.append(movimentacao)
+                # Log de progresso para lotes grandes
+                if total_registros > 50000 and i % (batch_size * 5) == 0:
+                    progresso = ((i + batch_size) / total_registros) * 100
+                    logger.info(f"📊 Progresso: {progresso:.1f}% ({len(movimentacoes):,} movimentações criadas)")
             
-            print(f"📊 Criadas {len(movimentacoes)} movimentações")
+            # Validação final das entidades criadas
+            entidades_validas = self._validar_entidades_criadas(movimentacoes)
+            if entidades_validas < len(movimentacoes):
+                logger.warning(f"⚠️ {len(movimentacoes) - entidades_validas} entidades com problemas de validação")
+            
+            logger.success(f"✅ Criadas {len(movimentacoes):,} movimentações ({entidades_validas:,} válidas)")
             return movimentacoes
     
-    def _determinar_tipo_movimentacao(self, row: Dict) -> str:
+    def _validar_tipos_entidade_movimentacao(self, df: pl.DataFrame) -> Dict[str, Any]:
         """
-        Determina o tipo de movimentação baseado nos dados da linha
+        Valida tipos de dados para criação de entidades Movimentacao - Item 5.3
+        
+        Args:
+            df: DataFrame com dados CAGED
+            
+        Returns:
+            Dict com resultado da validação
+        """
+        problemas = []
+        total_registros = df.shape[0]
+        
+        # Verificar campos essenciais para Movimentacao
+        campos_essenciais = ['CNPJ', 'CPF']
+        for campo in campos_essenciais:
+            if campo in df.columns:
+                # Verificar se há valores nulos em excesso
+                nulos = df.select(pl.col(campo).is_null().sum()).item()
+                if nulos > total_registros * 0.8:  # Mais de 80% nulos
+                    problemas.append(f"Campo {campo}: {nulos} valores nulos ({(nulos/total_registros)*100:.1f}%)")
+        
+        # Verificar tipos de movimentação válidos
+        if 'TIPO_MOVIMENTACAO' in df.columns:
+            tipos_validos = ['1', '2', 'ADMISSAO', 'ADMISSÃO', 'DESLIGAMENTO', 'DEMISSAO', 'DEMISSÃO']
+            tipos_invalidos = df.filter(
+                pl.col('TIPO_MOVIMENTACAO').is_not_null() &
+                (~pl.col('TIPO_MOVIMENTACAO').cast(pl.Utf8).is_in(tipos_validos))
+            ).shape[0]
+            
+            if tipos_invalidos > 0:
+                problemas.append(f"Tipos de movimentação inválidos: {tipos_invalidos} registros")
+        
+        return {
+            'valido': len(problemas) == 0,
+            'problemas': problemas,
+            'total_problemas': len(problemas)
+        }
+    
+    def _criar_mapeamento_colunas_entidade(self, colunas: List[str]) -> Dict[str, str]:
+        """
+        Cria mapeamento otimizado de colunas para entidades - Item 5.3
+        
+        Args:
+            colunas: Lista de colunas do DataFrame
+            
+        Returns:
+            Dict com mapeamento de colunas
+        """
+        mapeamento = {}
+        colunas_upper = [col.upper() for col in colunas]
+        
+        # Mapear campos principais
+        campos_mapeamento = {
+            'cnpj': ['CNPJ', 'CNPJ_CEI', 'CNPJ_EMPRESA'],
+            'cpf': ['CPF', 'CPF_TRABALHADOR', 'CPF_FUNCIONARIO'],
+            'tipo_movimentacao': ['TIPO_MOVIMENTACAO', 'TIPO_MOV', 'MOVIMENTACAO'],
+            'data_movimentacao': ['DATA_MOVIMENTACAO', 'DATA_ADMISSAO', 'DATA_DESLIGAMENTO', 'DATA'],
+            'admitidos': ['ADMITIDOS', 'ADMISSOES', 'ADMIT'],
+            'desligados': ['DESLIGADOS', 'DESLIG', 'DEMISSOES']
+        }
+        
+        for campo_entidade, possiveis_nomes in campos_mapeamento.items():
+            for nome in possiveis_nomes:
+                if nome in colunas_upper:
+                    idx = colunas_upper.index(nome)
+                    mapeamento[campo_entidade] = colunas[idx]
+                    break
+        
+        return mapeamento
+    
+    def _processar_lote_movimentacoes(self, batch_df: pl.DataFrame, competencia: str, 
+                                    mapeamento_colunas: Dict[str, str]) -> List[Movimentacao]:
+        """
+        Processa um lote de movimentações de forma otimizada - Item 5.3
+        
+        Args:
+            batch_df: DataFrame do lote
+            competencia: Competência no formato AAAA-MM
+            mapeamento_colunas: Mapeamento de colunas
+            
+        Returns:
+            Lista de movimentações do lote
+        """
+        movimentacoes_lote = []
+        
+        # Converter para dicionários uma vez só (mais eficiente que iter_rows)
+        dados_lote = batch_df.to_dicts()
+        
+        for row in dados_lote:
+            self.contador_entidades += 1
+            
+            # Usar mapeamento pré-calculado para extrair dados
+            cnpj = self._extrair_campo_mapeado(row, mapeamento_colunas, 'cnpj')
+            cpf = self._extrair_campo_mapeado(row, mapeamento_colunas, 'cpf')
+            tipo_movimentacao = self._determinar_tipo_movimentacao_otimizado(row, mapeamento_colunas)
+            data_movimentacao = self._extrair_data_movimentacao_otimizada(row, mapeamento_colunas)
+            
+            movimentacao = Movimentacao(
+                id=self.contador_entidades,
+                cnpj=cnpj or '',
+                cpf=cpf or '',
+                competencia=competencia,
+                tipo_movimentacao=tipo_movimentacao,
+                data_movimentacao=data_movimentacao
+            )
+            
+            movimentacoes_lote.append(movimentacao)
+        
+        return movimentacoes_lote
+    
+    def _extrair_campo_mapeado(self, row: Dict, mapeamento: Dict[str, str], campo: str) -> Optional[str]:
+        """
+        Extrai campo usando mapeamento pré-calculado - Item 5.3
+        
+        Args:
+            row: Linha de dados
+            mapeamento: Mapeamento de colunas
+            campo: Nome do campo a extrair
+            
+        Returns:
+            Valor do campo ou None
+        """
+        if campo in mapeamento:
+            coluna_real = mapeamento[campo]
+            valor = row.get(coluna_real)
+            return str(valor) if valor is not None else None
+        return None
+    
+    def _determinar_tipo_movimentacao_otimizado(self, row: Dict, mapeamento: Dict[str, str]) -> str:
+        """
+        Determina tipo de movimentação de forma otimizada - Item 5.3
         
         Args:
             row: Linha de dados do DataFrame
+            mapeamento: Mapeamento de colunas
             
         Returns:
             str: Tipo de movimentação ('admissao' ou 'desligamento')
         """
-        # Verificar campos específicos de tipo de movimentação
-        tipo_campo = row.get('TIPO_MOVIMENTACAO', '')
+        # Verificar campo específico de tipo usando mapeamento
+        tipo_campo = self._extrair_campo_mapeado(row, mapeamento, 'tipo_movimentacao')
         
-        if tipo_campo in ['1', 'ADMISSAO', 'ADMISSÃO']:
-            return 'admissao'
-        elif tipo_campo in ['2', 'DESLIGAMENTO', 'DEMISSAO', 'DEMISSÃO']:
-            return 'desligamento'
+        if tipo_campo:
+            tipo_upper = str(tipo_campo).upper()
+            if tipo_upper in ['1', 'ADMISSAO', 'ADMISSÃO']:
+                return 'admissao'
+            elif tipo_upper in ['2', 'DESLIGAMENTO', 'DEMISSAO', 'DEMISSÃO']:
+                return 'desligamento'
         
-        # Verificar se há dados de admissão ou desligamento
-        admitidos = row.get('ADMITIDOS', 0) or 0
-        desligados = row.get('DESLIGADOS', 0) or 0
+        # Verificar dados numéricos usando mapeamento
+        admitidos = self._extrair_campo_mapeado(row, mapeamento, 'admitidos')
+        desligados = self._extrair_campo_mapeado(row, mapeamento, 'desligados')
         
-        if admitidos > 0:
-            return 'admissao'
-        elif desligados > 0:
-            return 'desligamento'
+        try:
+            admitidos_num = int(admitidos) if admitidos else 0
+            desligados_num = int(desligados) if desligados else 0
+            
+            if admitidos_num > 0:
+                return 'admissao'
+            elif desligados_num > 0:
+                return 'desligamento'
+        except (ValueError, TypeError):
+            pass
         
-        # Padrão baseado no nome do arquivo ou outros indicadores
         return 'admissao'  # Padrão
     
-    def _extrair_data_movimentacao(self, row: Dict) -> Optional[date]:
+    def _validar_entidades_criadas(self, entidades: List[Movimentacao]) -> int:
         """
-        Extrai data de movimentação dos dados
+        Valida entidades criadas e retorna quantidade válida - Item 5.3
+        
+        Args:
+            entidades: Lista de entidades criadas
+            
+        Returns:
+            int: Número de entidades válidas
+        """
+        entidades_validas = 0
+        
+        for entidade in entidades:
+            # Validações básicas
+            if (entidade.id > 0 and 
+                entidade.competencia and 
+                entidade.tipo_movimentacao in ['admissao', 'desligamento']):
+                entidades_validas += 1
+        
+        return entidades_validas
+    
+    def _extrair_data_movimentacao_otimizada(self, row: Dict, mapeamento: Dict[str, str]) -> Optional[date]:
+        """
+        Extrai data de movimentação de forma otimizada - Item 5.3
         
         Args:
             row: Linha de dados do DataFrame
+            mapeamento: Mapeamento de colunas
             
         Returns:
             Optional[date]: Data de movimentação ou None
         """
-        # Tentar extrair data de diferentes campos
-        campos_data = ['DATA_ADMISSAO', 'DATA_DESLIGAMENTO', 'DATA_MOVIMENTACAO', 'DATA']
+        data_str = self._extrair_campo_mapeado(row, mapeamento, 'data_movimentacao')
         
-        for campo in campos_data:
-            if campo in row and row[campo]:
-                try:
-                    # Tentar diferentes formatos de data
-                    data_str = str(row[campo])
-                    for formato in ['%Y%m%d', '%d/%m/%Y', '%Y-%m-%d', '%d%m%Y']:
-                        try:
-                            return datetime.strptime(data_str, formato).date()
-                        except:
-                            continue
-                except:
-                    continue
+        if not data_str:
+            return None
+        
+        # Cache de formatos mais comuns primeiro para otimização
+        formatos_otimizados = ['%Y%m%d', '%Y-%m-%d', '%d/%m/%Y', '%d%m%Y', '%Y/%m/%d']
+        
+        for formato in formatos_otimizados:
+            try:
+                return datetime.strptime(str(data_str), formato).date()
+            except (ValueError, TypeError):
+                continue
         
         return None
     
     def _calcular_saldos_mensais(self, df: pl.DataFrame, ano: int, mes: int) -> List[SaldoMensal]:
         """
-        Calcula saldos mensais por CNPJ
+        Calcula saldos mensais por CNPJ - OTIMIZADO (Item 5.3)
         
         Args:
             df: DataFrame com dados CAGED
@@ -1816,60 +1980,151 @@ class ConversorParquetCaged:
         Returns:
             List[SaldoMensal]: Lista de saldos mensais
         """
-        with self.medidor.etapa("Cálculo de Saldos Mensais"):
+        with self.medidor.etapa("Cálculo Otimizado de Saldos Mensais"):
             saldos = []
             competencia = f"{ano}-{mes:02d}"
             
-            # Agrupar por CNPJ se disponível
-            if 'CNPJ' in df.columns:
-                # Agrupar por CNPJ e calcular totais
-                df_agrupado = df.group_by('CNPJ').agg([
-                    pl.sum('ADMITIDOS').alias('total_admissoes'),
-                    pl.sum('DESLIGADOS').alias('total_desligamentos'),
-                    pl.sum('SALDO').alias('saldo_total')
-                ])
-                
-                for row in df_agrupado.iter_rows(named=True):
-                    self.contador_entidades += 1
-                    
-                    saldo = SaldoMensal(
-                        id=self.contador_entidades,
-                        cnpj=row['CNPJ'],
-                        competencia=competencia,
-                        saldo=row['saldo_total'] or 0,
-                        admissoes=row['total_admissoes'] or 0,
-                        desligamentos=row['total_desligamentos'] or 0,
-                        exc_admissoes=0,  # Seria calculado se houvesse dados de exclusão
-                        exc_desligamentos=0
+            # Validação prévia dos campos necessários
+            campos_necessarios = ['ADMITIDOS', 'DESLIGADOS', 'SALDO']
+            campos_disponiveis = [c for c in campos_necessarios if c in df.columns]
+            
+            if not campos_disponiveis:
+                logger.warning("⚠️ Nenhum campo numérico encontrado para cálculo de saldos")
+                return saldos
+            
+            # Otimização: Usar expressões Polars para cálculos mais eficientes
+            try:
+                if 'CNPJ' in df.columns:
+                    # Filtrar CNPJs válidos (não nulos e não vazios)
+                    df_valido = df.filter(
+                        pl.col('CNPJ').is_not_null() & 
+                        (pl.col('CNPJ').cast(pl.Utf8).str.len_chars() > 0)
                     )
                     
-                    saldos.append(saldo)
-            else:
-                # Calcular totais gerais se não houver CNPJ
-                total_admissoes = df.select(pl.sum('ADMITIDOS')).item() or 0
-                total_desligamentos = df.select(pl.sum('DESLIGADOS')).item() or 0
-                saldo_total = df.select(pl.sum('SALDO')).item() or 0
+                    if df_valido.shape[0] > 0:
+                        # Agrupar com tratamento de nulos
+                        agregacoes = []
+                        for campo in campos_disponiveis:
+                            agregacoes.append(
+                                pl.sum(campo).fill_null(0).alias(f'total_{campo.lower()}')
+                            )
+                        
+                        df_agrupado = df_valido.group_by('CNPJ').agg(agregacoes)
+                        
+                        # Converter para entidades de forma otimizada
+                        dados_agrupados = df_agrupado.to_dicts()
+                        
+                        for row in dados_agrupados:
+                            self.contador_entidades += 1
+                            
+                            # Extrair valores com fallback seguro
+                            admissoes = row.get('total_admitidos', 0) or 0
+                            desligamentos = row.get('total_desligados', 0) or 0
+                            saldo_valor = row.get('total_saldo', 0) or 0
+                            
+                            # Validação de consistência
+                            if admissoes - desligamentos != saldo_valor and abs((admissoes - desligamentos) - saldo_valor) > 1:
+                                logger.debug(f"⚠️ Inconsistência no saldo para CNPJ {row['CNPJ']}: "
+                                           f"calculado={admissoes - desligamentos}, informado={saldo_valor}")
+                            
+                            saldo = SaldoMensal(
+                                id=self.contador_entidades,
+                                cnpj=str(row['CNPJ']),
+                                competencia=competencia,
+                                saldo=int(saldo_valor),
+                                admissoes=int(admissoes),
+                                desligamentos=int(desligamentos),
+                                exc_admissoes=0,  # Calculado quando houver dados de exclusão
+                                exc_desligamentos=0
+                            )
+                            
+                            saldos.append(saldo)
+                    
+                # Calcular totais gerais sempre (mesmo quando há CNPJ)
+                totais_gerais = self._calcular_totais_gerais_otimizado(df, campos_disponiveis)
+                if totais_gerais:
+                    self.contador_entidades += 1
+                    saldo_geral = SaldoMensal(
+                        id=self.contador_entidades,
+                        cnpj="GERAL",  # Identificador para totais gerais
+                        competencia=competencia,
+                        saldo=totais_gerais['saldo'],
+                        admissoes=totais_gerais['admissoes'],
+                        desligamentos=totais_gerais['desligamentos'],
+                        exc_admissoes=0,
+                        exc_desligamentos=0
+                    )
+                    saldos.append(saldo_geral)
                 
-                self.contador_entidades += 1
-                saldo = SaldoMensal(
-                    id=self.contador_entidades,
-                    cnpj="",  # CNPJ geral
-                    competencia=competencia,
-                    saldo=saldo_total,
-                    admissoes=total_admissoes,
-                    desligamentos=total_desligamentos,
-                    exc_admissoes=0,
-                    exc_desligamentos=0
-                )
-                
-                saldos.append(saldo)
+            except Exception as e:
+                logger.error(f"❌ Erro no cálculo de saldos mensais: {e}")
+                return []
             
-            print(f"📊 Calculados {len(saldos)} saldos mensais")
-            return saldos
+            # Validação final das entidades criadas
+            saldos_validos = [s for s in saldos if self._validar_saldo_mensal(s)]
+            
+            if len(saldos_validos) < len(saldos):
+                logger.warning(f"⚠️ {len(saldos) - len(saldos_validos)} saldos mensais inválidos removidos")
+            
+            logger.success(f"✅ Calculados {len(saldos_validos):,} saldos mensais válidos")
+            return saldos_validos
+    
+    def _calcular_totais_gerais_otimizado(self, df: pl.DataFrame, campos_disponiveis: List[str]) -> Optional[Dict[str, int]]:
+        """
+        Calcula totais gerais de forma otimizada - Item 5.3
+        
+        Args:
+            df: DataFrame com dados
+            campos_disponiveis: Lista de campos disponíveis
+            
+        Returns:
+            Dict com totais ou None se erro
+        """
+        try:
+            totais = {}
+            
+            for campo in campos_disponiveis:
+                total = df.select(pl.sum(campo).fill_null(0)).item() or 0
+                totais[campo.lower()] = int(total)
+            
+            return {
+                'admissoes': totais.get('admitidos', 0),
+                'desligamentos': totais.get('desligados', 0),
+                'saldo': totais.get('saldo', 0)
+            }
+            
+        except Exception as e:
+            logger.error(f"Erro ao calcular totais gerais: {e}")
+            return None
+    
+    def _validar_saldo_mensal(self, saldo: SaldoMensal) -> bool:
+        """
+        Valida entidade SaldoMensal - Item 5.3
+        
+        Args:
+            saldo: Entidade SaldoMensal
+            
+        Returns:
+            bool: True se válida
+        """
+        # Validações básicas
+        if not saldo.competencia or saldo.id <= 0:
+            return False
+        
+        # Validação de consistência matemática (com tolerância)
+        saldo_calculado = saldo.admissoes - saldo.desligamentos
+        if abs(saldo_calculado - saldo.saldo) > 1:  # Tolerância de 1 unidade
+            return False
+        
+        # Validação de valores não negativos para contadores
+        if saldo.admissoes < 0 or saldo.desligamentos < 0:
+            return False
+        
+        return True
     
     def _gerar_indicadores(self, df: pl.DataFrame, ano: int, mes: int) -> List[Indicador]:
         """
-        Gera indicadores baseados nos dados processados
+        Gera indicadores baseados nos dados processados - OTIMIZADO (Item 5.3)
         
         Args:
             df: DataFrame com dados CAGED
@@ -1879,44 +2134,219 @@ class ConversorParquetCaged:
         Returns:
             List[Indicador]: Lista de indicadores
         """
-        with self.medidor.etapa("Geração de Indicadores"):
+        with self.medidor.etapa("Geração Otimizada de Indicadores"):
             indicadores = []
             competencia = f"{ano}-{mes:02d}"
-            
-            # Calcular indicadores básicos
             total_registros = df.shape[0]
-            total_admissoes = df.select(pl.sum('ADMITIDOS')).item() or 0
-            total_desligamentos = df.select(pl.sum('DESLIGADOS')).item() or 0
-            saldo_total = df.select(pl.sum('SALDO')).item() or 0
             
-            # Taxa de rotatividade (se houver dados suficientes)
-            if total_admissoes + total_desligamentos > 0:
-                taxa_rotatividade = ((total_admissoes + total_desligamentos) / 2) / max(saldo_total, 1) * 100
-            else:
-                taxa_rotatividade = 0
+            if total_registros == 0:
+                logger.warning("⚠️ DataFrame vazio - nenhum indicador gerado")
+                return indicadores
             
-            # Criar indicadores
-            indicadores_dados = [
-                ("total_registros", total_registros),
-                ("total_admissoes", total_admissoes),
-                ("total_desligamentos", total_desligamentos),
-                ("saldo_total", saldo_total),
-                ("taxa_rotatividade", taxa_rotatividade)
-            ]
+            # Validação prévia dos campos necessários
+            campos_numericos = ['ADMITIDOS', 'DESLIGADOS', 'SALDO']
+            campos_disponiveis = [c for c in campos_numericos if c in df.columns]
             
-            for nome, valor in indicadores_dados:
-                self.contador_entidades += 1
-                indicador = Indicador(
-                    id=self.contador_entidades,
-                    cnpj="",  # Indicador geral
-                    competencia=competencia,
-                    nome_indicador=nome,
-                    valor=float(valor)
-                )
-                indicadores.append(indicador)
+            if not campos_disponiveis:
+                logger.warning("⚠️ Nenhum campo numérico encontrado para indicadores")
+                return indicadores
             
-            print(f"📊 Gerados {len(indicadores)} indicadores")
-            return indicadores
+            try:
+                # Calcular indicadores básicos de forma otimizada
+                indicadores_basicos = self._calcular_indicadores_basicos(df, campos_disponiveis)
+                
+                # Calcular indicadores avançados
+                indicadores_avancados = self._calcular_indicadores_avancados(df, indicadores_basicos)
+                
+                # Calcular indicadores por segmento (se houver dados)
+                indicadores_segmento = self._calcular_indicadores_por_segmento(df)
+                
+                # Consolidar todos os indicadores
+                todos_indicadores = {
+                    **indicadores_basicos,
+                    **indicadores_avancados,
+                    **indicadores_segmento
+                }
+                
+                # Criar entidades Indicador
+                for nome, valor in todos_indicadores.items():
+                    # Validar valor do indicador
+                    if self._validar_valor_indicador(valor):
+                        self.contador_entidades += 1
+                        indicador = Indicador(
+                            id=self.contador_entidades,
+                            cnpj="GERAL",  # Indicador geral
+                            competencia=competencia,
+                            nome_indicador=nome,
+                            valor=float(valor)
+                        )
+                        indicadores.append(indicador)
+                    else:
+                        logger.debug(f"⚠️ Indicador {nome} com valor inválido: {valor}")
+                
+                # Validação final dos indicadores
+                indicadores_validos = [i for i in indicadores if self._validar_indicador(i)]
+                
+                if len(indicadores_validos) < len(indicadores):
+                    logger.warning(f"⚠️ {len(indicadores) - len(indicadores_validos)} indicadores inválidos removidos")
+                
+                logger.success(f"✅ Gerados {len(indicadores_validos):,} indicadores válidos")
+                return indicadores_validos
+                
+            except Exception as e:
+                logger.error(f"❌ Erro na geração de indicadores: {e}")
+                return []
+    
+    def _calcular_indicadores_basicos(self, df: pl.DataFrame, campos_disponiveis: List[str]) -> Dict[str, float]:
+        """
+        Calcula indicadores básicos de forma otimizada - Item 5.3
+        
+        Args:
+            df: DataFrame com dados
+            campos_disponiveis: Lista de campos disponíveis
+            
+        Returns:
+            Dict com indicadores básicos
+        """
+        indicadores = {}
+        total_registros = df.shape[0]
+        
+        # Calcular totais usando expressões Polars otimizadas
+        for campo in campos_disponiveis:
+            total = df.select(pl.sum(campo).fill_null(0)).item() or 0
+            indicadores[f"total_{campo.lower()}"] = float(total)
+        
+        # Indicadores derivados
+        indicadores["total_registros"] = float(total_registros)
+        
+        # Saldo líquido (se disponível)
+        if 'ADMITIDOS' in campos_disponiveis and 'DESLIGADOS' in campos_disponiveis:
+            saldo_liquido = indicadores.get('total_admitidos', 0) - indicadores.get('total_desligados', 0)
+            indicadores["saldo_liquido_calculado"] = saldo_liquido
+        
+        return indicadores
+    
+    def _calcular_indicadores_avancados(self, df: pl.DataFrame, indicadores_basicos: Dict[str, float]) -> Dict[str, float]:
+        """
+        Calcula indicadores avançados - Item 5.3
+        
+        Args:
+            df: DataFrame com dados
+            indicadores_basicos: Indicadores básicos já calculados
+            
+        Returns:
+            Dict com indicadores avançados
+        """
+        indicadores = {}
+        
+        total_admissoes = indicadores_basicos.get('total_admitidos', 0)
+        total_desligamentos = indicadores_basicos.get('total_desligados', 0)
+        total_registros = indicadores_basicos.get('total_registros', 0)
+        
+        # Taxa de rotatividade
+        if total_admissoes + total_desligamentos > 0 and total_registros > 0:
+            taxa_rotatividade = ((total_admissoes + total_desligamentos) / 2) / total_registros * 100
+            indicadores["taxa_rotatividade"] = taxa_rotatividade
+        
+        # Taxa de crescimento líquido
+        if total_registros > 0:
+            saldo_liquido = total_admissoes - total_desligamentos
+            taxa_crescimento = (saldo_liquido / total_registros) * 100
+            indicadores["taxa_crescimento_liquido"] = taxa_crescimento
+        
+        # Razão admissão/desligamento
+        if total_desligamentos > 0:
+            razao_adm_desl = total_admissoes / total_desligamentos
+            indicadores["razao_admissao_desligamento"] = razao_adm_desl
+        
+        # Densidade de movimentação (movimentações por registro)
+        if total_registros > 0:
+            densidade = (total_admissoes + total_desligamentos) / total_registros
+            indicadores["densidade_movimentacao"] = densidade
+        
+        return indicadores
+    
+    def _calcular_indicadores_por_segmento(self, df: pl.DataFrame) -> Dict[str, float]:
+        """
+        Calcula indicadores por segmento quando possível - Item 5.3
+        
+        Args:
+            df: DataFrame com dados
+            
+        Returns:
+            Dict com indicadores por segmento
+        """
+        indicadores = {}
+        
+        try:
+            # Indicadores por UF (se disponível)
+            if 'UF' in df.columns:
+                ufs_distintas = df.select(pl.col('UF').n_unique()).item() or 0
+                indicadores["total_ufs_distintas"] = float(ufs_distintas)
+            
+            # Indicadores por CNAE (se disponível)
+            if 'CNAE_2_0_CLASSE' in df.columns:
+                cnaes_distintas = df.select(pl.col('CNAE_2_0_CLASSE').n_unique()).item() or 0
+                indicadores["total_cnaes_distintas"] = float(cnaes_distintas)
+            
+            # Indicadores por CNPJ (se disponível)
+            if 'CNPJ' in df.columns:
+                cnpjs_distintos = df.filter(
+                    pl.col('CNPJ').is_not_null() & 
+                    (pl.col('CNPJ').cast(pl.Utf8).str.len_chars() > 0)
+                ).select(pl.col('CNPJ').n_unique()).item() or 0
+                indicadores["total_cnpjs_distintos"] = float(cnpjs_distintos)
+                
+                # Média de movimentações por CNPJ
+                if cnpjs_distintos > 0:
+                    total_registros = df.shape[0]
+                    media_por_cnpj = total_registros / cnpjs_distintos
+                    indicadores["media_movimentacoes_por_cnpj"] = media_por_cnpj
+        
+        except Exception as e:
+            logger.debug(f"Erro ao calcular indicadores por segmento: {e}")
+        
+        return indicadores
+    
+    def _validar_valor_indicador(self, valor: Any) -> bool:
+        """
+        Valida se o valor do indicador é válido - Item 5.3
+        
+        Args:
+            valor: Valor a ser validado
+            
+        Returns:
+            bool: True se válido
+        """
+        import math
+        try:
+            valor_float = float(valor)
+            # Verificar se não é NaN ou infinito
+            return not (math.isnan(valor_float) or math.isinf(valor_float))
+        except (ValueError, TypeError):
+            return False
+    
+    def _validar_indicador(self, indicador: Indicador) -> bool:
+        """
+        Valida entidade Indicador - Item 5.3
+        
+        Args:
+            indicador: Entidade Indicador
+            
+        Returns:
+            bool: True se válida
+        """
+        # Validações básicas
+        if (not indicador.competencia or 
+            indicador.id <= 0 or 
+            not indicador.nome_indicador):
+            return False
+        
+        # Validar valor
+        if not self._validar_valor_indicador(indicador.valor):
+            return False
+        
+        return True
     
     def _detectar_separador(self, arquivo: Path, encoding: str) -> str:
         """

@@ -165,6 +165,34 @@ O CAGED contém informações mensais sobre:
 - **Demografia**: Sexo, faixa etária, escolaridade
 - **Especiais**: Tipo de deficiência, tipo de movimentação
 
+## 📈 Indicadores Gerados
+
+O sistema gera automaticamente diversos indicadores para análise do mercado de trabalho:
+
+### 📊 Indicadores Básicos
+- **Total de Registros**: Quantidade total de movimentações processadas
+- **Total de Admissões**: Soma de todas as admissões no período
+- **Total de Desligamentos**: Soma de todos os desligamentos no período
+- **Saldo Líquido Calculado**: Diferença entre admissões e desligamentos
+
+### 📈 Indicadores Avançados
+- **Taxa de Rotatividade**: Percentual de rotatividade da força de trabalho
+- **Taxa de Crescimento Líquido**: Percentual de crescimento do emprego
+- **Razão Admissão/Desligamento**: Proporção entre admissões e desligamentos
+- **Densidade de Movimentação**: Movimentações por registro
+
+### 🌍 Indicadores por Segmento
+- **Total de UFs Distintas**: Quantidade de Unidades Federativas com movimentação
+- **Total de CNAEs Distintas**: Quantidade de atividades econômicas distintas
+- **Total de CNPJs Distintos**: Quantidade de empresas com movimentação
+- **Média de Movimentações por CNPJ**: Distribuição de movimentações por empresa
+
+### 🎯 Características dos Indicadores
+- **Validação Automática**: Todos os indicadores passam por validação de consistência
+- **Tratamento de Erros**: Valores inválidos (NaN, infinito) são automaticamente filtrados
+- **Performance Otimizada**: Cálculos realizados com expressões Polars otimizadas
+- **Flexibilidade**: Indicadores adaptam-se aos campos disponíveis nos dados
+
 ## 🎯 Status do Desenvolvimento
 
 - [x] ✅ Estrutura inicial do projeto
