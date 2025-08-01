@@ -9,6 +9,7 @@ Versão 2.0 - Arquitetura escalável baseada no projeto RAIS
 import os
 import re
 import time
+import hashlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, date
 from pathlib import Path
@@ -67,12 +68,21 @@ CONFIG_PARALELISMO = {
     'retry_max': 3,  # Máximo de tentativas por arquivo
 }
 
-# Configurações de encoding e separadores
+# Configurações de encoding e separadores - Melhorias Fase 4.2
 CONFIG_ARQUIVO = {
-    'encodings_fallback': ['utf-8', 'latin1', 'cp1252', 'iso-8859-1'],
-    'separadores': [';', ',', '\t', '|'],
+    'encodings_fallback': ['utf-8', 'latin1', 'cp1252', 'iso-8859-1', 'utf-16', 'ascii'],
+    'separadores': [';', ',', '\t', '|', ':', '#'],
     'confianca_encoding_min': 0.7,
     'max_linhas_deteccao': 10000,
+    # Configurações avançadas de detecção
+    'tentativas_max_encoding': 3,
+    'timeout_deteccao_segundos': 30,
+    'tamanho_amostra_encoding': 65536,  # 64KB
+    'validacao_integridade_habilitada': True,
+    'recuperacao_automatica_habilitada': True,
+    'fallback_separador_inteligente': True,
+    'deteccao_bom_separador': True,
+    'analise_estrutural_habilitada': True
 }
 
 # ============================================================================
@@ -1015,7 +1025,8 @@ class ConversorParquetCaged:
         
     def detectar_encoding(self, arquivo: Path) -> str:
         """
-        Detecta encoding do arquivo CAGED com múltiplos fallbacks
+        Detecta encoding do arquivo CAGED com múltiplos fallbacks avançados
+        Implementação da Fase 4.2 - Melhorias na detecção e tratamento
         
         Args:
             arquivo: Caminho do arquivo
@@ -1023,50 +1034,217 @@ class ConversorParquetCaged:
         Returns:
             str: Encoding detectado
         """
-        try:
-            import chardet
-            
-            # Ler amostra maior para melhor detecção
-            with open(arquivo, 'rb') as f:
-                raw_data = f.read(CONFIG_ARQUIVO['max_linhas_deteccao'])
-            
-            result = chardet.detect(raw_data)
-            encoding = result.get('encoding', 'latin1')
-            confidence = result.get('confidence', 0)
-            
-            logger.debug(f"Encoding detectado: {encoding} (confiança: {confidence:.2f})")
-            
-            # Se confiança baixa, testar fallbacks
-            if confidence < CONFIG_ARQUIVO['confianca_encoding_min']:
-                logger.warning(f"Confiança baixa ({confidence:.2f}), testando fallbacks")
+        tentativas = 0
+        max_tentativas = CONFIG_ARQUIVO['tentativas_max_encoding']
+        
+        while tentativas < max_tentativas:
+            try:
+                import chardet
                 
-                for fallback in CONFIG_ARQUIVO['encodings_fallback']:
-                    try:
-                        with open(arquivo, 'r', encoding=fallback) as f:
-                            # Tentar ler algumas linhas para validar
-                            for _ in range(5):
-                                linha = f.readline()
-                                if not linha:
-                                    break
-                        
-                        logger.info(f"Fallback bem-sucedido: {fallback}")
-                        return fallback
-                        
-                    except (UnicodeDecodeError, UnicodeError) as e:
-                        logger.debug(f"Fallback {fallback} falhou: {e}")
-                        continue
-                    except Exception as e:
-                        logger.warning(f"Erro inesperado no fallback {fallback}: {e}")
-                        continue
+                # Ler amostra otimizada para melhor detecção
+                tamanho_amostra = CONFIG_ARQUIVO['tamanho_amostra_encoding']
+                with open(arquivo, 'rb') as f:
+                    raw_data = f.read(tamanho_amostra)
+                
+                # Detecção primária com chardet
+                result = chardet.detect(raw_data)
+                encoding = result.get('encoding', 'latin1')
+                confidence = result.get('confidence', 0)
+                
+                logger.debug(f"Encoding detectado: {encoding} (confiança: {confidence:.2f}, tentativa: {tentativas + 1})")
+                
+                # Validação do encoding detectado
+                if confidence >= CONFIG_ARQUIVO['confianca_encoding_min']:
+                    if self._validar_encoding(arquivo, encoding):
+                        logger.info(f"✅ Encoding validado: {encoding} (confiança: {confidence:.2f})")
+                        return encoding
+                    else:
+                        logger.warning(f"⚠️  Encoding {encoding} falhou na validação")
+                
+                # Sistema de fallbacks inteligente
+                encoding_fallback = self._aplicar_fallbacks_encoding(arquivo, encoding)
+                if encoding_fallback:
+                    return encoding_fallback
+                
+                tentativas += 1
+                if tentativas < max_tentativas:
+                    logger.warning(f"Tentativa {tentativas} falhou, tentando novamente...")
+                    time.sleep(0.1)  # Pequena pausa entre tentativas
+                
+            except ImportError:
+                logger.warning("chardet não disponível, usando fallbacks manuais")
+                return self._fallback_encoding_manual(arquivo)
+            except Exception as e:
+                logger.error(f"Erro na detecção de encoding (tentativa {tentativas + 1}): {e}")
+                tentativas += 1
+        
+        # Fallback final
+        logger.error(f"❌ Falha na detecção após {max_tentativas} tentativas, usando latin1")
+        return 'latin1'
+    
+    def _validar_encoding(self, arquivo: Path, encoding: str) -> bool:
+        """
+        Valida se o encoding consegue ler o arquivo sem erros
+        
+        Args:
+            arquivo: Caminho do arquivo
+            encoding: Encoding a validar
             
-            return encoding or 'latin1'
-            
-        except ImportError:
-            logger.warning("chardet não disponível, usando latin1")
-            return 'latin1'
+        Returns:
+            bool: True se válido
+        """
+        try:
+            with open(arquivo, 'r', encoding=encoding) as f:
+                # Tentar ler várias linhas para validação robusta
+                for i in range(min(20, 1000)):
+                    linha = f.readline()
+                    if not linha:
+                        break
+                    # Verificar se há caracteres suspeitos
+                    if '\ufffd' in linha or len(linha.strip()) == 0:
+                        continue
+            return True
+        except (UnicodeDecodeError, UnicodeError):
+            return False
         except Exception as e:
-            logger.error(f"Erro na detecção de encoding: {e}")
-            return 'latin1'
+            logger.debug(f"Erro na validação do encoding {encoding}: {e}")
+            return False
+    
+    def _aplicar_fallbacks_encoding(self, arquivo: Path, encoding_original: str) -> Optional[str]:
+        """
+        Aplica sistema de fallbacks inteligente para encoding
+        
+        Args:
+            arquivo: Caminho do arquivo
+            encoding_original: Encoding detectado originalmente
+            
+        Returns:
+            str: Encoding válido ou None
+        """
+        # Lista de fallbacks ordenada por probabilidade de sucesso
+        fallbacks = CONFIG_ARQUIVO['encodings_fallback'].copy()
+        
+        # Priorizar encoding original se não estiver na lista
+        if encoding_original and encoding_original not in fallbacks:
+            fallbacks.insert(0, encoding_original)
+        
+        # Adicionar variações comuns do encoding original
+        if encoding_original:
+            variações = self._gerar_variacoes_encoding(encoding_original)
+            for variacao in variações:
+                if variacao not in fallbacks:
+                    fallbacks.insert(1, variacao)
+        
+        logger.info(f"Testando {len(fallbacks)} fallbacks de encoding...")
+        
+        for i, fallback in enumerate(fallbacks):
+            try:
+                if self._validar_encoding(arquivo, fallback):
+                    # Validação adicional: tentar ler uma amostra maior
+                    if self._validacao_profunda_encoding(arquivo, fallback):
+                        logger.info(f"✅ Fallback bem-sucedido: {fallback} (posição {i + 1})")
+                        return fallback
+                    else:
+                        logger.debug(f"Fallback {fallback} passou na validação básica mas falhou na profunda")
+                        
+            except Exception as e:
+                logger.debug(f"Fallback {fallback} falhou: {e}")
+                continue
+        
+        logger.warning("❌ Todos os fallbacks de encoding falharam")
+        return None
+    
+    def _gerar_variacoes_encoding(self, encoding: str) -> List[str]:
+        """
+        Gera variações comuns de um encoding
+        
+        Args:
+            encoding: Encoding base
+            
+        Returns:
+            List[str]: Lista de variações
+        """
+        if not encoding:
+            return []
+        
+        variacoes = []
+        encoding_lower = encoding.lower()
+        
+        # Mapeamento de variações comuns
+        mapeamentos = {
+            'utf-8': ['utf8', 'utf-8-sig'],
+            'latin1': ['latin-1', 'iso-8859-1', 'cp1252'],
+            'cp1252': ['windows-1252', 'latin1'],
+            'iso-8859-1': ['latin1', 'latin-1'],
+            'ascii': ['us-ascii'],
+        }
+        
+        for base, vars in mapeamentos.items():
+            if base in encoding_lower:
+                variacoes.extend(vars)
+        
+        return list(set(variacoes))  # Remover duplicatas
+    
+    def _validacao_profunda_encoding(self, arquivo: Path, encoding: str) -> bool:
+        """
+        Validação profunda do encoding lendo uma amostra maior
+        
+        Args:
+            arquivo: Caminho do arquivo
+            encoding: Encoding a validar
+            
+        Returns:
+            bool: True se passou na validação profunda
+        """
+        try:
+            caracteres_suspeitos = 0
+            linhas_lidas = 0
+            
+            with open(arquivo, 'r', encoding=encoding) as f:
+                for _ in range(100):  # Ler até 100 linhas
+                    linha = f.readline()
+                    if not linha:
+                        break
+                    
+                    linhas_lidas += 1
+                    
+                    # Contar caracteres de substituição
+                    if '\ufffd' in linha:
+                        caracteres_suspeitos += linha.count('\ufffd')
+                    
+                    # Verificar se linha tem conteúdo válido
+                    if len(linha.strip()) == 0:
+                        continue
+            
+            # Calcular taxa de erro
+            if linhas_lidas == 0:
+                return False
+            
+            taxa_erro = caracteres_suspeitos / linhas_lidas
+            return taxa_erro < 0.1  # Menos de 10% de caracteres suspeitos
+            
+        except Exception:
+            return False
+    
+    def _fallback_encoding_manual(self, arquivo: Path) -> str:
+        """
+        Fallback manual quando chardet não está disponível
+        
+        Args:
+            arquivo: Caminho do arquivo
+            
+        Returns:
+            str: Encoding detectado manualmente
+        """
+        encodings_teste = ['utf-8', 'latin1', 'cp1252', 'iso-8859-1']
+        
+        for encoding in encodings_teste:
+            if self._validar_encoding(arquivo, encoding):
+                logger.info(f"Fallback manual bem-sucedido: {encoding}")
+                return encoding
+        
+        logger.warning("Fallback manual falhou, usando latin1")
+        return 'latin1'
     
     def processar_arquivo_mensal(self, 
                                arquivo: Path, 
@@ -1203,8 +1381,57 @@ class ConversorParquetCaged:
             return df, movimentacoes, saldos_mensais, indicadores
             
         except Exception as e:
-             logger.error(f"❌ Erro ao processar arquivo: {e}", exc_info=True)
-             raise
+            logger.error(f"❌ Erro ao processar arquivo: {e}")
+            
+            # Tentar recuperação automática se habilitada
+            if CONFIG_ARQUIVO.get('recuperacao_automatica_habilitada', True):
+                logger.warning("🔧 Tentando recuperação automática...")
+                df_recuperado = self._tentar_recuperacao_dados(arquivo, str(e))
+                
+                if df_recuperado is not None:
+                    logger.success("✅ Recuperação automática bem-sucedida!")
+                    
+                    # Processar dados recuperados
+                    try:
+                        # Padronizar colunas
+                        df_recuperado = self._padronizar_colunas(df_recuperado, arquivo)
+                        
+                        # Filtrar campos se especificado
+                        if campos_selecionados:
+                            campos_disponiveis = [c for c in campos_selecionados if c in df_recuperado.columns]
+                            if campos_disponiveis:
+                                df_recuperado = df_recuperado.select(campos_disponiveis)
+                        
+                        # Aplicar tipos de dados
+                        df_recuperado = self._aplicar_tipos_dados(df_recuperado)
+                        
+                        # Adicionar colunas de controle
+                        df_recuperado = df_recuperado.with_columns([
+                            pl.lit(f"{ano}-{mes:02d}").alias("ANO_MES"),
+                            pl.lit(ano).alias("ANO"),
+                            pl.lit(mes).alias("MES")
+                        ])
+                        
+                        # Aplicar filtros se habilitados
+                        if self.habilitar_filtros and self.gerenciador_filtros:
+                            df_recuperado = self._aplicar_filtros_dataframe(df_recuperado)
+                        
+                        # Converter para entidades
+                        movimentacoes = self._dataframe_para_movimentacoes(df_recuperado, ano, mes)
+                        saldos_mensais = self._calcular_saldos_mensais(df_recuperado, ano, mes)
+                        indicadores = self._gerar_indicadores(df_recuperado, ano, mes)
+                        
+                        logger.info(f"✅ Dados recuperados processados: {df_recuperado.shape[0]:,} registros")
+                        return df_recuperado, movimentacoes, saldos_mensais, indicadores
+                        
+                    except Exception as e_recuperacao:
+                        logger.error(f"❌ Erro ao processar dados recuperados: {e_recuperacao}")
+                        raise e  # Relançar erro original
+                else:
+                    logger.error("❌ Recuperação automática falhou")
+                    raise e  # Relançar erro original
+            else:
+                raise e  # Relançar erro original
     
     def _processar_arquivo_em_chunks(self, arquivo: Path, ano: int, mes: int,
                                    encoding: str, separador: str,
@@ -1214,13 +1441,30 @@ class ConversorParquetCaged:
         """
         try:
             # Primeiro, ler apenas o cabeçalho para determinar as colunas
-            df_header = pl.read_csv(
-                arquivo,
-                separator=separador,
-                encoding=encoding,
-                has_header=True,
-                n_rows=1
-            )
+            try:
+                df_header = pl.read_csv(
+                    arquivo,
+                    separator=separador,
+                    encoding=encoding,
+                    has_header=True,
+                    n_rows=1
+                )
+            except Exception as e_header:
+                logger.warning(f"Erro ao ler cabeçalho: {e_header}")
+                
+                # Tentar recuperação automática para cabeçalho
+                if CONFIG_ARQUIVO.get('recuperacao_automatica_habilitada', True):
+                    logger.warning("🔧 Tentando recuperação automática para cabeçalho...")
+                    df_recuperado = self._tentar_recuperacao_dados(arquivo, str(e_header))
+                    
+                    if df_recuperado is not None:
+                        df_header = df_recuperado.head(1)
+                        logger.success("✅ Cabeçalho recuperado com sucesso!")
+                    else:
+                        logger.error("❌ Falha na recuperação do cabeçalho")
+                        raise e_header
+                else:
+                    raise e_header
             
             numero_colunas = df_header.shape[1]
             tamanho_arquivo = arquivo.stat().st_size
@@ -1321,13 +1565,73 @@ class ConversorParquetCaged:
                     
             except Exception as e:
                 logger.error(f"Erro no processamento em chunks: {e}")
+                
+                # Tentar recuperação automática se habilitada
+                if CONFIG_ARQUIVO.get('recuperacao_automatica_habilitada', True):
+                    logger.warning("🔧 Tentando recuperação automática para chunks...")
+                    df_recuperado = self._tentar_recuperacao_dados(arquivo, str(e))
+                    
+                    if df_recuperado is not None:
+                        logger.success("✅ Recuperação automática bem-sucedida para chunks!")
+                        
+                        # Processar dados recuperados diretamente (sem chunks)
+                        try:
+                            df_processado = self._processar_chunk_individual(
+                                df_recuperado, arquivo, ano, mes, campos_selecionados
+                            )
+                            
+                            if df_processado.shape[0] > 0:
+                                # Converter para entidades
+                                movimentacoes = self._dataframe_para_movimentacoes(df_processado, ano, mes)
+                                saldos_mensais = self._calcular_saldos_mensais(df_processado, ano, mes)
+                                indicadores = self._gerar_indicadores(df_processado, ano, mes)
+                                
+                                logger.info(f"✅ Dados recuperados processados: {df_processado.shape[0]:,} registros")
+                                return df_processado, movimentacoes, saldos_mensais, indicadores
+                            else:
+                                logger.warning("Dados recuperados estão vazios")
+                                
+                        except Exception as e_recuperacao:
+                            logger.error(f"❌ Erro ao processar dados recuperados: {e_recuperacao}")
+                    else:
+                        logger.error("❌ Recuperação automática falhou para chunks")
+                
                 # Fallback para processamento direto
                 logger.info("Tentando processamento direto como fallback...")
                 return self._processar_arquivo_direto(arquivo, ano, mes, encoding, separador, campos_selecionados)
                 
         except Exception as e:
-            logger.error(f"❌ Erro crítico no processamento em chunks: {e}", exc_info=True)
-            raise
+            logger.error(f"❌ Erro crítico no processamento em chunks: {e}")
+            
+            # Última tentativa de recuperação automática
+            if CONFIG_ARQUIVO.get('recuperacao_automatica_habilitada', True):
+                logger.warning("🔧 Última tentativa de recuperação automática...")
+                df_recuperado = self._tentar_recuperacao_dados(arquivo, str(e))
+                
+                if df_recuperado is not None:
+                    logger.success("✅ Recuperação automática crítica bem-sucedida!")
+                    
+                    try:
+                        df_processado = self._processar_chunk_individual(
+                            df_recuperado, arquivo, ano, mes, campos_selecionados
+                        )
+                        
+                        if df_processado.shape[0] > 0:
+                            movimentacoes = self._dataframe_para_movimentacoes(df_processado, ano, mes)
+                            saldos_mensais = self._calcular_saldos_mensais(df_processado, ano, mes)
+                            indicadores = self._gerar_indicadores(df_processado, ano, mes)
+                            
+                            logger.info(f"✅ Recuperação crítica processada: {df_processado.shape[0]:,} registros")
+                            return df_processado, movimentacoes, saldos_mensais, indicadores
+                            
+                    except Exception as e_critica:
+                        logger.error(f"❌ Erro na recuperação crítica: {e_critica}")
+                        raise e  # Relançar erro original
+                else:
+                    logger.error("❌ Recuperação automática crítica falhou")
+                    raise e  # Relançar erro original
+            else:
+                raise e  # Relançar erro original
     
     def _processar_chunk_individual(self, df_chunk: pl.DataFrame, arquivo: Path, 
                                   ano: int, mes: int,
@@ -1584,7 +1888,8 @@ class ConversorParquetCaged:
     
     def _detectar_separador(self, arquivo: Path, encoding: str) -> str:
         """
-        Detecta o separador do arquivo CSV com análise aprimorada
+        Detecta o separador do arquivo CSV com análise aprimorada e múltiplos fallbacks
+        Implementação da Fase 4.2 - Melhorias na detecção e tratamento
         
         Args:
             arquivo: Caminho do arquivo
@@ -1594,45 +1899,355 @@ class ConversorParquetCaged:
             str: Separador detectado
         """
         try:
+            # Validar integridade do arquivo antes da detecção
+            if CONFIG_ARQUIVO['validacao_integridade_habilitada']:
+                if not self._validar_integridade_arquivo(arquivo):
+                    logger.warning("⚠️  Arquivo pode estar corrompido, procedendo com cautela")
+            
             with open(arquivo, 'r', encoding=encoding) as f:
-                # Ler múltiplas linhas para melhor detecção
-                linhas = [f.readline().strip() for _ in range(min(5, 1000))]
-                linhas = [linha for linha in linhas if linha]  # Remover vazias
+                # Ler amostra maior para análise mais robusta
+                linhas = []
+                for i in range(min(20, 2000)):  # Aumentado de 5 para 20 linhas
+                    linha = f.readline().strip()
+                    if linha and len(linha) > 10:  # Filtrar linhas muito curtas
+                        linhas.append(linha)
+                    if len(linhas) >= 15:  # Parar quando tiver linhas suficientes
+                        break
             
             if not linhas:
                 logger.warning("Arquivo vazio ou sem linhas válidas")
-                return ';'
+                return self._fallback_separador_inteligente(arquivo, encoding)
             
-            # Analisar cada separador
-            resultados = {}
+            # Análise estrutural avançada
+            if CONFIG_ARQUIVO['analise_estrutural_habilitada']:
+                separador_estrutural = self._analise_estrutural_separador(linhas)
+                if separador_estrutural:
+                    logger.info(f"✅ Separador detectado por análise estrutural: '{separador_estrutural}'")
+                    return separador_estrutural
             
-            for separador in CONFIG_ARQUIVO['separadores']:
-                contagens = [linha.count(separador) for linha in linhas]
-                
-                if contagens:
-                    # Verificar consistência (todas as linhas devem ter contagem similar)
-                    contagem_media = sum(contagens) / len(contagens)
-                    variacao = max(contagens) - min(contagens)
-                    
-                    # Penalizar alta variação (inconsistência)
-                    score = contagem_media - (variacao * 0.5)
-                    resultados[separador] = max(0, score)
-                else:
-                    resultados[separador] = 0
+            # Análise estatística melhorada
+            resultados = self._analisar_separadores_estatisticamente(linhas)
             
-            # Escolher melhor separador
+            # Escolher melhor separador com validação
             if resultados:
-                separador = max(resultados, key=resultados.get)
-                if resultados[separador] > 0:
-                    logger.debug(f"Separador detectado: '{separador}' (score: {resultados[separador]:.2f})")
-                    return separador
+                separador_candidato = max(resultados, key=resultados.get)
+                score_maximo = resultados[separador_candidato]
+                
+                if score_maximo > 1.0:  # Score mínimo para confiança
+                    # Validar separador candidato
+                    if self._validar_separador(linhas, separador_candidato):
+                        logger.info(f"✅ Separador validado: '{separador_candidato}' (score: {score_maximo:.2f})")
+                        return separador_candidato
+                    else:
+                        logger.warning(f"Separador '{separador_candidato}' falhou na validação")
             
-            # Fallback para padrão brasileiro
-            logger.warning("Nenhum separador consistente encontrado, usando ';'")
+            # Fallback inteligente
+            if CONFIG_ARQUIVO['fallback_separador_inteligente']:
+                separador_fallback = self._fallback_separador_inteligente(arquivo, encoding)
+                if separador_fallback:
+                    return separador_fallback
+            
+            # Fallback final para padrão brasileiro
+            logger.warning("❌ Nenhum separador consistente encontrado, usando ';'")
             return ';'
             
         except Exception as e:
-            logger.error(f"Erro na detecção de separador: {e}")
+            logger.error(f"❌ Erro na detecção de separador: {e}")
+            if CONFIG_ARQUIVO['recuperacao_automatica_habilitada']:
+                return self._recuperacao_automatica_separador(arquivo, encoding)
+            return ';'
+    
+    def _validar_integridade_arquivo(self, arquivo: Path) -> bool:
+        """
+        Valida a integridade básica do arquivo
+        
+        Args:
+            arquivo: Caminho do arquivo
+            
+        Returns:
+            bool: True se arquivo parece íntegro
+        """
+        try:
+            stat = arquivo.stat()
+            
+            # Verificar se arquivo não está vazio
+            if stat.st_size == 0:
+                logger.error("Arquivo está vazio")
+                return False
+            
+            # Verificar se arquivo não é muito pequeno (menos de 100 bytes)
+            if stat.st_size < 100:
+                logger.warning("Arquivo muito pequeno, pode estar incompleto")
+                return False
+            
+            # Verificar se arquivo não é excessivamente grande (mais de 10GB)
+            if stat.st_size > 10 * 1024 * 1024 * 1024:
+                logger.warning("Arquivo muito grande, processamento pode ser lento")
+            
+            # Tentar abrir arquivo para verificar se não está corrompido
+            with open(arquivo, 'rb') as f:
+                # Ler primeiros e últimos bytes
+                primeiro_chunk = f.read(1024)
+                if len(primeiro_chunk) == 0:
+                    return False
+                
+                # Verificar se há bytes nulos (indicativo de arquivo binário)
+                if b'\x00' in primeiro_chunk:
+                    logger.warning("Arquivo contém bytes nulos, pode ser binário")
+                    return False
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Erro na validação de integridade: {e}")
+            return False
+    
+    def _analise_estrutural_separador(self, linhas: List[str]) -> Optional[str]:
+        """
+        Análise estrutural avançada para detectar separador
+        
+        Args:
+            linhas: Lista de linhas do arquivo
+            
+        Returns:
+            str: Separador detectado ou None
+        """
+        try:
+            # Analisar padrões estruturais
+            for separador in CONFIG_ARQUIVO['separadores']:
+                # Verificar se separador cria estrutura consistente
+                colunas_por_linha = []
+                
+                for linha in linhas[:10]:  # Analisar primeiras 10 linhas
+                    partes = linha.split(separador)
+                    colunas_por_linha.append(len(partes))
+                
+                if colunas_por_linha:
+                    # Verificar consistência do número de colunas
+                    num_colunas_comum = max(set(colunas_por_linha), key=colunas_por_linha.count)
+                    consistencia = colunas_por_linha.count(num_colunas_comum) / len(colunas_por_linha)
+                    
+                    # Se mais de 80% das linhas têm o mesmo número de colunas
+                    if consistencia >= 0.8 and num_colunas_comum > 2:
+                        # Verificar se não há separadores aninhados
+                        if self._verificar_separadores_aninhados(linhas[:5], separador):
+                            logger.debug(f"Separador estrutural candidato: '{separador}' (consistência: {consistencia:.2f}, colunas: {num_colunas_comum})")
+                            return separador
+            
+            return None
+            
+        except Exception as e:
+            logger.debug(f"Erro na análise estrutural: {e}")
+            return None
+    
+    def _verificar_separadores_aninhados(self, linhas: List[str], separador: str) -> bool:
+        """
+        Verifica se há separadores aninhados que podem causar problemas
+        
+        Args:
+            linhas: Lista de linhas
+            separador: Separador a verificar
+            
+        Returns:
+            bool: True se não há problemas de aninhamento
+        """
+        try:
+            outros_separadores = [s for s in CONFIG_ARQUIVO['separadores'] if s != separador]
+            
+            for linha in linhas:
+                partes = linha.split(separador)
+                
+                for parte in partes:
+                    # Verificar se alguma parte contém muitos outros separadores
+                    for outro_sep in outros_separadores:
+                        if parte.count(outro_sep) > 3:  # Limite arbitrário
+                            return False
+            
+            return True
+            
+        except Exception:
+            return True  # Em caso de erro, assumir que está ok
+    
+    def _analisar_separadores_estatisticamente(self, linhas: List[str]) -> Dict[str, float]:
+        """
+        Análise estatística melhorada dos separadores
+        
+        Args:
+            linhas: Lista de linhas do arquivo
+            
+        Returns:
+            Dict[str, float]: Scores dos separadores
+        """
+        resultados = {}
+        
+        for separador in CONFIG_ARQUIVO['separadores']:
+            contagens = [linha.count(separador) for linha in linhas]
+            
+            if not contagens or max(contagens) == 0:
+                resultados[separador] = 0
+                continue
+            
+            # Métricas estatísticas
+            contagem_media = sum(contagens) / len(contagens)
+            contagem_max = max(contagens)
+            contagem_min = min(contagens)
+            variacao = contagem_max - contagem_min
+            
+            # Calcular desvio padrão
+            if len(contagens) > 1:
+                variancia = sum((x - contagem_media) ** 2 for x in contagens) / len(contagens)
+                desvio_padrao = variancia ** 0.5
+            else:
+                desvio_padrao = 0
+            
+            # Score composto considerando múltiplos fatores
+            score_base = contagem_media
+            penalidade_variacao = variacao * 0.3
+            penalidade_desvio = desvio_padrao * 0.2
+            bonus_consistencia = 0
+            
+            # Bonus para separadores muito consistentes
+            if variacao <= 1 and contagem_media > 2:
+                bonus_consistencia = contagem_media * 0.5
+            
+            # Score final
+            score_final = score_base - penalidade_variacao - penalidade_desvio + bonus_consistencia
+            resultados[separador] = max(0, score_final)
+            
+            logger.debug(f"Separador '{separador}': média={contagem_media:.1f}, variação={variacao}, desvio={desvio_padrao:.1f}, score={score_final:.2f}")
+        
+        return resultados
+    
+    def _validar_separador(self, linhas: List[str], separador: str) -> bool:
+        """
+        Valida se o separador produz resultados consistentes
+        
+        Args:
+            linhas: Lista de linhas
+            separador: Separador a validar
+            
+        Returns:
+            bool: True se separador é válido
+        """
+        try:
+            # Verificar se separador produz pelo menos 2 colunas
+            colunas_por_linha = [len(linha.split(separador)) for linha in linhas[:10]]
+            
+            if not colunas_por_linha or max(colunas_por_linha) < 2:
+                return False
+            
+            # Verificar consistência
+            num_colunas_comum = max(set(colunas_por_linha), key=colunas_por_linha.count)
+            consistencia = colunas_por_linha.count(num_colunas_comum) / len(colunas_por_linha)
+            
+            # Pelo menos 70% das linhas devem ter o mesmo número de colunas
+            return consistencia >= 0.7
+            
+        except Exception:
+            return False
+    
+    def _fallback_separador_inteligente(self, arquivo: Path, encoding: str) -> str:
+        """
+        Fallback inteligente para detecção de separador
+        
+        Args:
+            arquivo: Caminho do arquivo
+            encoding: Encoding do arquivo
+            
+        Returns:
+            str: Separador detectado
+        """
+        try:
+            # Tentar detectar baseado na extensão do arquivo
+            extensao = arquivo.suffix.lower()
+            if extensao == '.tsv':
+                logger.info("Arquivo .tsv detectado, usando tabulação")
+                return '\t'
+            elif extensao == '.csv':
+                logger.info("Arquivo .csv detectado, testando separadores comuns")
+                # Para CSV, testar vírgula e ponto-e-vírgula
+                for sep in [',', ';']:
+                    if self._testar_separador_simples(arquivo, encoding, sep):
+                        return sep
+            
+            # Fallback baseado no nome do arquivo
+            nome_arquivo = arquivo.name.lower()
+            if 'caged' in nome_arquivo or 'brasil' in nome_arquivo:
+                logger.info("Arquivo CAGED brasileiro detectado, usando ';'")
+                return ';'
+            
+            # Fallback final
+            return ';'
+            
+        except Exception as e:
+            logger.debug(f"Erro no fallback inteligente: {e}")
+            return ';'
+    
+    def _testar_separador_simples(self, arquivo: Path, encoding: str, separador: str) -> bool:
+        """
+        Teste simples de um separador específico
+        
+        Args:
+            arquivo: Caminho do arquivo
+            encoding: Encoding do arquivo
+            separador: Separador a testar
+            
+        Returns:
+            bool: True se separador funciona
+        """
+        try:
+            with open(arquivo, 'r', encoding=encoding) as f:
+                linhas = [f.readline().strip() for _ in range(3)]
+                linhas = [l for l in linhas if l]
+            
+            if not linhas:
+                return False
+            
+            # Verificar se separador produz múltiplas colunas consistentemente
+            colunas = [len(linha.split(separador)) for linha in linhas]
+            return len(set(colunas)) == 1 and colunas[0] > 1
+            
+        except Exception:
+            return False
+    
+    def _recuperacao_automatica_separador(self, arquivo: Path, encoding: str) -> str:
+        """
+        Sistema de recuperação automática para detecção de separador
+        
+        Args:
+            arquivo: Caminho do arquivo
+            encoding: Encoding do arquivo
+            
+        Returns:
+            str: Separador de recuperação
+        """
+        logger.warning("🔧 Iniciando recuperação automática de separador...")
+        
+        try:
+            # Tentar ler arquivo com diferentes estratégias
+            estrategias = [
+                ('latin1', ';'),
+                ('utf-8', ','),
+                ('cp1252', '\t'),
+                (encoding, '|')
+            ]
+            
+            for enc_teste, sep_teste in estrategias:
+                try:
+                    with open(arquivo, 'r', encoding=enc_teste) as f:
+                        linha = f.readline().strip()
+                        if linha and linha.count(sep_teste) > 0:
+                            logger.info(f"✅ Recuperação bem-sucedida: encoding={enc_teste}, separador='{sep_teste}'")
+                            return sep_teste
+                except Exception:
+                    continue
+            
+            # Fallback absoluto
+            logger.warning("❌ Recuperação automática falhou, usando ';'")
+            return ';'
+            
+        except Exception as e:
+            logger.error(f"Erro na recuperação automática: {e}")
             return ';'
     
     def _padronizar_colunas(self, df: pl.DataFrame, arquivo_origem: Optional[Path] = None) -> pl.DataFrame:
@@ -1790,7 +2405,7 @@ class ConversorParquetCaged:
     
     def validar_integridade_dados(self, df: pl.DataFrame) -> Dict[str, Any]:
         """
-        Valida integridade dos dados CAGED com múltiplas verificações
+        Valida integridade dos dados CAGED com múltiplas verificações avançadas
         
         Args:
             df: DataFrame a validar
@@ -1802,11 +2417,38 @@ class ConversorParquetCaged:
             'valido_geral': True,
             'validacoes': {},
             'alertas': [],
-            'erros': []
+            'erros': [],
+            'checksum': None,
+            'recuperacao_aplicada': False
         }
         
         try:
-            # 1. Validação de saldo de movimentação
+            # Calcular checksum dos dados para integridade
+            resultado_validacao['checksum'] = self._calcular_checksum_dataframe(df)
+            
+            # 1. Validação de qualidade avançada
+            resultado_qualidade = self._validar_qualidade_avancada(df)
+            resultado_validacao['validacoes']['qualidade_avancada'] = resultado_qualidade
+            
+            if not resultado_qualidade['valido']:
+                resultado_validacao['valido_geral'] = False
+                resultado_validacao['alertas'].append(resultado_qualidade['mensagem'])
+            
+            # 2. Validação de consistência estrutural
+            resultado_estrutural = self._validar_consistencia_estrutural(df)
+            resultado_validacao['validacoes']['consistencia_estrutural'] = resultado_estrutural
+            
+            if not resultado_estrutural['valido']:
+                resultado_validacao['alertas'].append(resultado_estrutural['mensagem'])
+            
+            # 3. Validação de integridade referencial
+            resultado_referencial = self._validar_integridade_referencial(df)
+            resultado_validacao['validacoes']['integridade_referencial'] = resultado_referencial
+            
+            if not resultado_referencial['valido']:
+                resultado_validacao['alertas'].append(resultado_referencial['mensagem'])
+            
+            # 4. Validação de saldo de movimentação
             resultado_saldo = self._validar_saldo_movimentacao(df)
             resultado_validacao['validacoes']['saldo_movimentacao'] = resultado_saldo
             
@@ -1814,21 +2456,21 @@ class ConversorParquetCaged:
                 resultado_validacao['valido_geral'] = False
                 resultado_validacao['alertas'].append(resultado_saldo['mensagem'])
             
-            # 2. Validação de consistência temporal
+            # 5. Validação de consistência temporal
             resultado_temporal = self._validar_consistencia_temporal(df)
             resultado_validacao['validacoes']['consistencia_temporal'] = resultado_temporal
             
             if not resultado_temporal['valido']:
                 resultado_validacao['alertas'].append(resultado_temporal['mensagem'])
             
-            # 3. Validação de domínios válidos
+            # 6. Validação de domínios válidos
             resultado_dominios = self._validar_dominios_validos(df)
             resultado_validacao['validacoes']['dominios_validos'] = resultado_dominios
             
             if not resultado_dominios['valido']:
                 resultado_validacao['alertas'].append(resultado_dominios['mensagem'])
             
-            # 4. Validação de completude de dados
+            # 7. Validação de completude de dados
             resultado_completude = self._validar_completude_dados(df)
             resultado_validacao['validacoes']['completude_dados'] = resultado_completude
             
@@ -1982,7 +2624,386 @@ class ConversorParquetCaged:
             'colunas_problematicas': colunas_com_problemas
         }
     
-    def converter_mensal(self, 
+    def _calcular_checksum_dataframe(self, df: pl.DataFrame) -> str:
+        """Calcula checksum MD5 do DataFrame para verificação de integridade"""
+        try:
+            # Converter DataFrame para string ordenada para checksum consistente
+            df_str = str(df.sort(df.columns).to_pandas().to_string())
+            return hashlib.md5(df_str.encode()).hexdigest()
+        except Exception as e:
+            logger.warning(f"Erro ao calcular checksum: {e}")
+            return "checksum_indisponivel"
+    
+    def _validar_qualidade_avancada(self, df: pl.DataFrame) -> Dict[str, Any]:
+        """Validação avançada de qualidade dos dados"""
+        problemas = []
+        total_registros = df.shape[0]
+        
+        try:
+            # 1. Verificar duplicatas
+            duplicatas = df.shape[0] - df.unique().shape[0]
+            if duplicatas > 0:
+                percentual_dup = (duplicatas / total_registros) * 100
+                problemas.append(f"Duplicatas: {duplicatas} registros ({percentual_dup:.1f}%)")
+            
+            # 2. Verificar consistência de tipos
+            for coluna in df.columns:
+                if coluna in CAMPOS_NUMERICOS:
+                    try:
+                        df.select(pl.col(coluna).cast(pl.Float64, strict=True))
+                    except:
+                        problemas.append(f"Tipo inconsistente: {coluna} deveria ser numérico")
+            
+            # 3. Verificar valores extremos (outliers)
+            for coluna in CAMPOS_NUMERICOS:
+                if coluna in df.columns:
+                    try:
+                        valores = df.select(pl.col(coluna).cast(pl.Float64, strict=False)).to_series()
+                        q1 = valores.quantile(0.25)
+                        q3 = valores.quantile(0.75)
+                        iqr = q3 - q1
+                        outliers = valores.filter((valores < q1 - 1.5 * iqr) | (valores > q3 + 1.5 * iqr)).len()
+                        if outliers > total_registros * 0.05:  # Mais de 5% outliers
+                            problemas.append(f"Outliers: {coluna} tem {outliers} valores extremos")
+                    except:
+                        pass
+            
+            return {
+                'valido': len(problemas) == 0,
+                'mensagem': f"Qualidade: {len(problemas)} problemas encontrados" if problemas else "Qualidade: OK",
+                'problemas': problemas
+            }
+            
+        except Exception as e:
+            return {
+                'valido': False,
+                'mensagem': f"Erro na validação de qualidade: {e}",
+                'problemas': [str(e)]
+            }
+    
+    def _validar_consistencia_estrutural(self, df: pl.DataFrame) -> Dict[str, Any]:
+        """Valida consistência estrutural dos dados"""
+        problemas = []
+        
+        try:
+            # 1. Verificar se campos essenciais estão presentes
+            campos_faltantes = []
+            for categoria, campos in CAMPOS_ESSENCIAIS_CAGED.items():
+                encontrado = any(campo in df.columns for campo in campos)
+                if not encontrado:
+                    campos_faltantes.append(categoria)
+            
+            if campos_faltantes:
+                problemas.append(f"Campos essenciais ausentes: {', '.join(campos_faltantes)}")
+            
+            # 2. Verificar estrutura de colunas
+            if df.shape[1] < 5:
+                problemas.append(f"Poucas colunas: {df.shape[1]} (esperado >= 5)")
+            
+            # 3. Verificar se há dados
+            if df.shape[0] == 0:
+                problemas.append("DataFrame vazio")
+            
+            return {
+                'valido': len(problemas) == 0,
+                'mensagem': f"Estrutura: {len(problemas)} problemas encontrados" if problemas else "Estrutura: OK",
+                'problemas': problemas
+            }
+            
+        except Exception as e:
+            return {
+                'valido': False,
+                'mensagem': f"Erro na validação estrutural: {e}",
+                'problemas': [str(e)]
+            }
+    
+    def _validar_integridade_referencial(self, df: pl.DataFrame) -> Dict[str, Any]:
+        """Valida integridade referencial entre campos relacionados"""
+        problemas = []
+        
+        try:
+            # 1. Verificar relação UF-Município (se ambos presentes)
+            if 'UF' in df.columns and 'MUNICIPIO' in df.columns:
+                # Verificar se há municípios sem UF ou vice-versa
+                sem_uf = df.filter(pl.col('UF').is_null() & pl.col('MUNICIPIO').is_not_null()).shape[0]
+                sem_municipio = df.filter(pl.col('UF').is_not_null() & pl.col('MUNICIPIO').is_null()).shape[0]
+                
+                if sem_uf > 0:
+                    problemas.append(f"Municípios sem UF: {sem_uf} registros")
+                if sem_municipio > 0:
+                    problemas.append(f"UF sem município: {sem_municipio} registros")
+            
+            # 2. Verificar consistência CNAE (se presente)
+            if 'CNAE_2_0_CLASSE' in df.columns and 'CNAE_2_0_SUBCLASSE' in df.columns:
+                # Subclasse deve começar com o código da classe
+                inconsistencias = df.filter(
+                    pl.col('CNAE_2_0_CLASSE').is_not_null() &
+                    pl.col('CNAE_2_0_SUBCLASSE').is_not_null() &
+                    ~pl.col('CNAE_2_0_SUBCLASSE').str.starts_with(pl.col('CNAE_2_0_CLASSE'))
+                ).shape[0]
+                
+                if inconsistencias > 0:
+                    problemas.append(f"CNAE inconsistente: {inconsistencias} registros")
+            
+            return {
+                'valido': len(problemas) == 0,
+                'mensagem': f"Referencial: {len(problemas)} problemas encontrados" if problemas else "Referencial: OK",
+                'problemas': problemas
+            }
+            
+        except Exception as e:
+            return {
+                 'valido': False,
+                 'mensagem': f"Erro na validação referencial: {e}",
+                 'problemas': [str(e)]
+             }
+    
+    def _tentar_recuperacao_dados(self, arquivo: Path, erro_original: str) -> Optional[pl.DataFrame]:
+        """
+        Tenta recuperar dados usando múltiplas estratégias quando a leitura normal falha
+        
+        Args:
+            arquivo: Caminho do arquivo
+            erro_original: Erro que causou a falha inicial
+            
+        Returns:
+            DataFrame recuperado ou None se não foi possível
+        """
+        logger.warning(f"Iniciando recuperação automática para {arquivo.name}: {erro_original}")
+        
+        estrategias = [
+            'encoding_alternativo',
+            'separador_alternativo', 
+            'combinacao_alternativa',
+            'leitura_permissiva',
+            'linha_por_linha'
+        ]
+        
+        for estrategia in estrategias:
+            try:
+                logger.info(f"Tentando estratégia: {estrategia}")
+                df_recuperado = self._aplicar_estrategia_recuperacao(arquivo, estrategia)
+                
+                if df_recuperado is not None and df_recuperado.shape[0] > 0:
+                    # Validar dados recuperados
+                    if self._validar_dados_recuperados(df_recuperado):
+                        logger.success(f"✅ Recuperação bem-sucedida com estratégia: {estrategia}")
+                        return df_recuperado
+                    else:
+                        logger.warning(f"Dados recuperados com {estrategia} falharam na validação")
+                        
+            except Exception as e:
+                logger.debug(f"Estratégia {estrategia} falhou: {e}")
+                continue
+        
+        logger.error(f"❌ Todas as estratégias de recuperação falharam para {arquivo.name}")
+        return None
+    
+    def _aplicar_estrategia_recuperacao(self, arquivo: Path, estrategia: str) -> Optional[pl.DataFrame]:
+        """Aplica uma estratégia específica de recuperação"""
+        
+        if estrategia == 'encoding_alternativo':
+            return self._recuperacao_encoding_alternativo(arquivo)
+        elif estrategia == 'separador_alternativo':
+            return self._recuperacao_separador_alternativo(arquivo)
+        elif estrategia == 'combinacao_alternativa':
+            return self._recuperacao_combinacao_alternativa(arquivo)
+        elif estrategia == 'leitura_permissiva':
+            return self._recuperacao_leitura_permissiva(arquivo)
+        elif estrategia == 'linha_por_linha':
+            return self._recuperacao_linha_por_linha(arquivo)
+        else:
+            return None
+    
+    def _recuperacao_encoding_alternativo(self, arquivo: Path) -> Optional[pl.DataFrame]:
+        """Tenta diferentes encodings para recuperar o arquivo"""
+        encodings_recuperacao = ['utf-8', 'latin1', 'cp1252', 'iso-8859-1', 'utf-16', 'ascii', 'utf-32']
+        
+        for encoding in encodings_recuperacao:
+            try:
+                logger.debug(f"Tentando encoding: {encoding}")
+                separador = self._detectar_separador(arquivo, encoding)
+                
+                df = pl.read_csv(
+                    arquivo,
+                    separator=separador,
+                    encoding=encoding,
+                    ignore_errors=True,
+                    truncate_ragged_lines=True
+                )
+                
+                if df.shape[0] > 0:
+                    return df
+                    
+            except Exception as e:
+                logger.debug(f"Encoding {encoding} falhou: {e}")
+                continue
+        
+        return None
+    
+    def _recuperacao_separador_alternativo(self, arquivo: Path) -> Optional[pl.DataFrame]:
+        """Tenta diferentes separadores para recuperar o arquivo"""
+        encoding = self.detectar_encoding(arquivo)
+        separadores_recuperacao = [';', ',', '\t', '|', ':', '#', ' ', '~']
+        
+        for separador in separadores_recuperacao:
+            try:
+                logger.debug(f"Tentando separador: '{separador}'")
+                
+                df = pl.read_csv(
+                    arquivo,
+                    separator=separador,
+                    encoding=encoding,
+                    ignore_errors=True,
+                    truncate_ragged_lines=True
+                )
+                
+                if df.shape[0] > 0 and df.shape[1] > 1:
+                    return df
+                    
+            except Exception as e:
+                logger.debug(f"Separador '{separador}' falhou: {e}")
+                continue
+        
+        return None
+    
+    def _recuperacao_combinacao_alternativa(self, arquivo: Path) -> Optional[pl.DataFrame]:
+        """Tenta diferentes combinações de encoding e separador"""
+        encodings = ['utf-8', 'latin1', 'cp1252']
+        separadores = [';', ',', '\t', '|']
+        
+        for encoding in encodings:
+            for separador in separadores:
+                try:
+                    logger.debug(f"Tentando combinação: {encoding} + '{separador}'")
+                    
+                    df = pl.read_csv(
+                        arquivo,
+                        separator=separador,
+                        encoding=encoding,
+                        ignore_errors=True,
+                        truncate_ragged_lines=True
+                    )
+                    
+                    if df.shape[0] > 0 and df.shape[1] > 3:
+                        return df
+                        
+                except Exception as e:
+                    logger.debug(f"Combinação {encoding}+'{separador}' falhou: {e}")
+                    continue
+        
+        return None
+    
+    def _recuperacao_leitura_permissiva(self, arquivo: Path) -> Optional[pl.DataFrame]:
+        """Leitura permissiva ignorando erros"""
+        try:
+            encoding = 'utf-8'
+            separador = ';'
+            
+            # Tentar leitura com máxima permissividade
+            df = pl.read_csv(
+                arquivo,
+                separator=separador,
+                encoding=encoding,
+                ignore_errors=True,
+                truncate_ragged_lines=True,
+                skip_rows_after_header=0,
+                null_values=['', 'NULL', 'null', 'NA', 'N/A', '#N/A'],
+                try_parse_dates=False
+            )
+            
+            return df if df.shape[0] > 0 else None
+            
+        except Exception as e:
+            logger.debug(f"Leitura permissiva falhou: {e}")
+            return None
+    
+    def _recuperacao_linha_por_linha(self, arquivo: Path) -> Optional[pl.DataFrame]:
+        """Lê arquivo linha por linha, ignorando linhas problemáticas"""
+        try:
+            encoding = self.detectar_encoding(arquivo)
+            linhas_validas = []
+            cabecalho = None
+            
+            with open(arquivo, 'r', encoding=encoding, errors='ignore') as f:
+                for i, linha in enumerate(f):
+                    try:
+                        linha = linha.strip()
+                        if not linha:
+                            continue
+                            
+                        if i == 0:
+                            cabecalho = linha
+                            continue
+                        
+                        # Verificar se linha tem estrutura mínima
+                        if ';' in linha or ',' in linha or '\t' in linha:
+                            linhas_validas.append(linha)
+                            
+                        # Limitar para evitar uso excessivo de memória
+                        if len(linhas_validas) > 100000:
+                            break
+                            
+                    except Exception:
+                        continue
+            
+            if cabecalho and linhas_validas:
+                # Criar arquivo temporário com linhas válidas
+                conteudo_limpo = cabecalho + '\n' + '\n'.join(linhas_validas)
+                
+                # Detectar separador do conteúdo limpo
+                separador = ';' if ';' in cabecalho else (',' if ',' in cabecalho else '\t')
+                
+                # Ler usando StringIO
+                from io import StringIO
+                df = pl.read_csv(
+                    StringIO(conteudo_limpo),
+                    separator=separador,
+                    ignore_errors=True
+                )
+                
+                return df if df.shape[0] > 0 else None
+            
+        except Exception as e:
+            logger.debug(f"Recuperação linha por linha falhou: {e}")
+            return None
+    
+    def _validar_dados_recuperados(self, df: pl.DataFrame) -> bool:
+        """Valida se os dados recuperados são utilizáveis"""
+        try:
+            # Verificações básicas
+            if df.shape[0] == 0:
+                return False
+            
+            if df.shape[1] < 3:
+                return False
+            
+            # Verificar se há pelo menos alguns campos reconhecíveis
+            colunas_str = ' '.join(df.columns).upper()
+            campos_reconhecidos = 0
+            
+            for categoria, campos in CAMPOS_ESSENCIAIS_CAGED.items():
+                for campo in campos:
+                    if campo in colunas_str:
+                        campos_reconhecidos += 1
+                        break
+            
+            # Pelo menos 2 campos essenciais devem estar presentes
+            if campos_reconhecidos < 2:
+                return False
+            
+            # Verificar se não é só cabeçalho
+            if df.shape[0] < 2:
+                return False
+            
+            logger.info(f"Dados recuperados validados: {df.shape[0]} linhas, {df.shape[1]} colunas")
+            return True
+            
+        except Exception as e:
+            logger.debug(f"Erro na validação de dados recuperados: {e}")
+            return False
+     
+     def converter_mensal(self, 
                         ano: int, 
                         mes: int,
                         campos_selecionados: Optional[List[str]] = None,
