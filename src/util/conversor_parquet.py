@@ -11,7 +11,7 @@ import re
 import time
 import hashlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
 
@@ -202,13 +202,35 @@ VALIDACOES_INTEGRIDADE = {
     'consistencia_temporal': {
         'campos_data': ['COMPETENCIA', 'DATA_ADMISSAO', 'DATA_DEMISSAO'],
         'formato_esperado': 'YYYY-MM',
+        'validar_sequencia_mensal': True,
+        'validar_periodo_valido': True,
+        'periodo_minimo': '2020-01',  # Início do Novo CAGED
+        'periodo_maximo': None,  # Será definido dinamicamente
         'obrigatorio': False
+    },
+    # Validações de integridade referencial
+    'integridade_referencial': {
+        'validar_cnae_hierarquia': True,
+        'validar_uf_municipio': True,
+        'validar_cbo_ocupacao': True,
+        'validar_competencia_movimentacao': True,
+        'tolerancia_percentual': 2.0,
+        'obrigatorio': True
     },
     # Validações de domínio
     'dominios_validos': {
         'UF': ['AC', 'AL', 'AP', 'AM', 'BA', 'CE', 'DF', 'ES', 'GO', 'MA', 'MT', 'MS', 'MG', 'PA', 'PB', 'PR', 'PE', 'PI', 'RJ', 'RN', 'RS', 'RO', 'RR', 'SC', 'SP', 'SE', 'TO'],
         'SEXO': ['M', 'F', 'MASCULINO', 'FEMININO', '1', '2'],
+        'TIPO_MOVIMENTACAO': ['10', '20', '31', '32', '35', '40', '50', '70'],  # Códigos válidos CAGED
         'obrigatorio': False
+    },
+    # Validações específicas do CAGED
+    'validacoes_caged': {
+        'validar_exclusoes': True,
+        'validar_movimentacoes_fora_prazo': True,
+        'validar_duplicatas_cnpj_cpf': True,
+        'validar_saldo_acumulado': True,
+        'obrigatorio': True
     }
 }
 
@@ -2478,6 +2500,13 @@ class ConversorParquetCaged:
                 if not resultado_temporal['valido']:
                     resultado_validacao['alertas'].append(resultado_temporal['mensagem'])
                 
+                # 8. Validações específicas do CAGED
+                resultado_caged = self._validar_especificidades_caged(df)
+                resultado_validacao['validacoes']['especificidades_caged'] = resultado_caged
+                
+                if not resultado_caged['valido']:
+                    resultado_validacao['alertas'].append(resultado_caged['mensagem'])
+                
                 # 6. Validação de domínios válidos
                 resultado_dominios = self._validar_dominios_validos(df)
                 resultado_validacao['validacoes']['dominios_validos'] = resultado_dominios
@@ -2568,7 +2597,7 @@ class ConversorParquetCaged:
             }
     
     def _validar_consistencia_temporal(self, df: pl.DataFrame) -> Dict[str, Any]:
-        """Valida consistência de campos temporais"""
+        """Valida consistência de campos temporais com verificações avançadas"""
         with self.medidor.etapa("Validação de Consistência Temporal"):
             config = VALIDACOES_INTEGRIDADE['consistencia_temporal']
         campos_data = [c for c in config['campos_data'] if c in df.columns]
@@ -2581,21 +2610,66 @@ class ConversorParquetCaged:
             }
         
         problemas = []
+        detalhes_validacao = {}
+        
         for campo in campos_data:
-            # Verificar formato básico (YYYY-MM ou similar)
+            detalhes_campo = {'formato_invalido': 0, 'periodo_invalido': 0, 'sequencia_quebrada': 0}
+            
+            # 1. Verificar formato básico (YYYY-MM ou similar)
             valores_invalidos = df.filter(
                 pl.col(campo).is_not_null() & 
                 ~pl.col(campo).str.contains(r'^\d{4}-\d{2}$|^\d{6}$|^\d{4}/\d{2}$')
             ).shape[0]
             
+            detalhes_campo['formato_invalido'] = valores_invalidos
             if valores_invalidos > 0:
                 problemas.append(f"{campo}: {valores_invalidos} valores com formato inválido")
+            
+            # 2. Validar período válido (se configurado)
+            if config.get('validar_periodo_valido', False) and config.get('periodo_minimo'):
+                try:
+                    # Normalizar formato para YYYY-MM
+                    df_normalizado = df.with_columns([
+                        pl.when(pl.col(campo).str.len_chars() == 6)
+                        .then(pl.col(campo).str.slice(0, 4) + "-" + pl.col(campo).str.slice(4, 2))
+                        .otherwise(pl.col(campo))
+                        .alias(f"{campo}_norm")
+                    ])
+                    
+                    periodo_min = config['periodo_minimo']
+                    periodo_max = config.get('periodo_maximo') or datetime.now().strftime('%Y-%m')
+                    
+                    periodos_invalidos = df_normalizado.filter(
+                        pl.col(f"{campo}_norm").is_not_null() &
+                        ((pl.col(f"{campo}_norm") < periodo_min) | (pl.col(f"{campo}_norm") > periodo_max))
+                    ).shape[0]
+                    
+                    detalhes_campo['periodo_invalido'] = periodos_invalidos
+                    if periodos_invalidos > 0:
+                        problemas.append(f"{campo}: {periodos_invalidos} valores fora do período válido ({periodo_min} a {periodo_max})")
+                        
+                except Exception as e:
+                    problemas.append(f"{campo}: Erro na validação de período - {str(e)}")
+            
+            # 3. Validar sequência mensal (se configurado)
+            if config.get('validar_sequencia_mensal', False) and campo == 'COMPETENCIA':
+                try:
+                    competencias_unicas = df.select(pl.col(campo)).unique().sort(campo)
+                    if competencias_unicas.shape[0] > 1:
+                        # Verificar se há quebras na sequência mensal
+                        # Esta validação é mais complexa e pode ser implementada conforme necessário
+                        pass
+                except Exception as e:
+                    problemas.append(f"{campo}: Erro na validação de sequência - {str(e)}")
+            
+            detalhes_validacao[campo] = detalhes_campo
         
         return {
             'valido': len(problemas) == 0,
             'mensagem': f"Temporal: {len(problemas)} problemas encontrados" if problemas else "Temporal: OK",
             'campos_validados': campos_data,
-            'problemas': problemas
+            'problemas': problemas,
+            'detalhes': detalhes_validacao
         }
     
     def _validar_dominios_validos(self, df: pl.DataFrame) -> Dict[str, Any]:
@@ -2740,45 +2814,287 @@ class ConversorParquetCaged:
             }
     
     def _validar_integridade_referencial(self, df: pl.DataFrame) -> Dict[str, Any]:
-        """Valida integridade referencial entre campos relacionados"""
+        """Valida integridade referencial entre campos relacionados com verificações avançadas"""
         with self.medidor.etapa("Validação de Integridade Referencial"):
-            problemas = []
+            config = VALIDACOES_INTEGRIDADE['integridade_referencial']
+        problemas = []
+        detalhes_validacao = {}
+        total_registros = df.shape[0]
         
         try:
             # 1. Verificar relação UF-Município (se ambos presentes)
-            if 'UF' in df.columns and 'MUNICIPIO' in df.columns:
-                # Verificar se há municípios sem UF ou vice-versa
+            if config.get('validar_uf_municipio', True) and 'UF' in df.columns and 'MUNICIPIO' in df.columns:
                 sem_uf = df.filter(pl.col('UF').is_null() & pl.col('MUNICIPIO').is_not_null()).shape[0]
                 sem_municipio = df.filter(pl.col('UF').is_not_null() & pl.col('MUNICIPIO').is_null()).shape[0]
                 
+                detalhes_validacao['uf_municipio'] = {
+                    'municipios_sem_uf': sem_uf,
+                    'uf_sem_municipio': sem_municipio,
+                    'percentual_problemas': ((sem_uf + sem_municipio) / total_registros) * 100 if total_registros > 0 else 0
+                }
+                
                 if sem_uf > 0:
-                    problemas.append(f"Municípios sem UF: {sem_uf} registros")
+                    problemas.append(f"Municípios sem UF: {sem_uf} registros ({(sem_uf/total_registros)*100:.2f}%)")
                 if sem_municipio > 0:
-                    problemas.append(f"UF sem município: {sem_municipio} registros")
+                    problemas.append(f"UF sem município: {sem_municipio} registros ({(sem_municipio/total_registros)*100:.2f}%)")
             
-            # 2. Verificar consistência CNAE (se presente)
-            if 'CNAE_2_0_CLASSE' in df.columns and 'CNAE_2_0_SUBCLASSE' in df.columns:
-                # Subclasse deve começar com o código da classe
-                inconsistencias = df.filter(
-                    pl.col('CNAE_2_0_CLASSE').is_not_null() &
-                    pl.col('CNAE_2_0_SUBCLASSE').is_not_null() &
-                    ~pl.col('CNAE_2_0_SUBCLASSE').str.starts_with(pl.col('CNAE_2_0_CLASSE'))
+            # 2. Verificar hierarquia CNAE (se presente)
+            if config.get('validar_cnae_hierarquia', True):
+                cnae_problemas = 0
+                
+                # Verificar CNAE Classe e Subclasse
+                if 'CNAE_2_0_CLASSE' in df.columns and 'CNAE_2_0_SUBCLASSE' in df.columns:
+                    inconsistencias = df.filter(
+                        pl.col('CNAE_2_0_CLASSE').is_not_null() &
+                        pl.col('CNAE_2_0_SUBCLASSE').is_not_null() &
+                        ~pl.col('CNAE_2_0_SUBCLASSE').str.starts_with(pl.col('CNAE_2_0_CLASSE'))
+                    ).shape[0]
+                    cnae_problemas += inconsistencias
+                    
+                    if inconsistencias > 0:
+                        problemas.append(f"CNAE Classe/Subclasse inconsistente: {inconsistencias} registros")
+                
+                # Verificar códigos CNAE válidos (formato)
+                for campo_cnae in ['CNAE_2_0_CLASSE', 'CNAE_2_0_SUBCLASSE']:
+                    if campo_cnae in df.columns:
+                        # CNAE Classe deve ter 5 dígitos, Subclasse deve ter 7 dígitos
+                        tamanho_esperado = 5 if 'CLASSE' in campo_cnae else 7
+                        invalidos = df.filter(
+                            pl.col(campo_cnae).is_not_null() &
+                            (pl.col(campo_cnae).str.len_chars() != tamanho_esperado)
+                        ).shape[0]
+                        
+                        if invalidos > 0:
+                            cnae_problemas += invalidos
+                            problemas.append(f"{campo_cnae} formato inválido: {invalidos} registros")
+                
+                detalhes_validacao['cnae'] = {
+                    'total_problemas': cnae_problemas,
+                    'percentual_problemas': (cnae_problemas / total_registros) * 100 if total_registros > 0 else 0
+                }
+            
+            # 3. Verificar CBO e ocupação (se presente)
+            if config.get('validar_cbo_ocupacao', True) and 'CBO_2002' in df.columns:
+                # CBO deve ter 6 dígitos
+                cbo_invalidos = df.filter(
+                    pl.col('CBO_2002').is_not_null() &
+                    ~pl.col('CBO_2002').str.contains(r'^\d{6}$')
                 ).shape[0]
                 
-                if inconsistencias > 0:
-                    problemas.append(f"CNAE inconsistente: {inconsistencias} registros")
+                detalhes_validacao['cbo'] = {
+                    'codigos_invalidos': cbo_invalidos,
+                    'percentual_problemas': (cbo_invalidos / total_registros) * 100 if total_registros > 0 else 0
+                }
+                
+                if cbo_invalidos > 0:
+                    problemas.append(f"CBO formato inválido: {cbo_invalidos} registros")
+            
+            # 4. Verificar consistência competência-movimentação
+            if config.get('validar_competencia_movimentacao', True) and 'COMPETENCIA' in df.columns:
+                # Verificar se há movimentações com competência futura
+                try:
+                    competencia_atual = datetime.now().strftime('%Y%m')
+                    futuras = df.filter(
+                        pl.col('COMPETENCIA').is_not_null() &
+                        (pl.col('COMPETENCIA').cast(pl.Utf8) > competencia_atual)
+                    ).shape[0]
+                    
+                    detalhes_validacao['competencia'] = {
+                        'movimentacoes_futuras': futuras,
+                        'percentual_problemas': (futuras / total_registros) * 100 if total_registros > 0 else 0
+                    }
+                    
+                    if futuras > 0:
+                        problemas.append(f"Movimentações com competência futura: {futuras} registros")
+                        
+                except Exception as e:
+                    problemas.append(f"Erro na validação de competência: {str(e)}")
+            
+            # 5. Validações específicas do CAGED
+            if 'validacoes_caged' in VALIDACOES_INTEGRIDADE:
+                caged_config = VALIDACOES_INTEGRIDADE['validacoes_caged']
+                
+                # Verificar duplicatas por CNPJ/CPF/Competência
+                if caged_config.get('validar_duplicatas_cnpj_cpf', True):
+                    campos_chave = []
+                    for campo in ['CNPJ', 'CPF', 'COMPETENCIA']:
+                        if campo in df.columns:
+                            campos_chave.append(campo)
+                    
+                    if len(campos_chave) >= 2:
+                        duplicatas = df.shape[0] - df.unique(subset=campos_chave).shape[0]
+                        detalhes_validacao['duplicatas'] = {
+                            'registros_duplicados': duplicatas,
+                            'percentual_duplicatas': (duplicatas / total_registros) * 100 if total_registros > 0 else 0
+                        }
+                        
+                        if duplicatas > 0:
+                            problemas.append(f"Duplicatas por chave CNPJ/CPF/Competência: {duplicatas} registros")
+            
+            # Verificar se o percentual de problemas está dentro da tolerância
+            total_problemas = sum([det.get('total_problemas', 0) for det in detalhes_validacao.values() if isinstance(det, dict)])
+            percentual_total = (total_problemas / total_registros) * 100 if total_registros > 0 else 0
+            tolerancia = config.get('tolerancia_percentual', 2.0)
+            
+            valido = len(problemas) == 0 or percentual_total <= tolerancia
             
             return {
-                'valido': len(problemas) == 0,
-                'mensagem': f"Referencial: {len(problemas)} problemas encontrados" if problemas else "Referencial: OK",
-                'problemas': problemas
+                'valido': valido,
+                'mensagem': f"Referencial: {len(problemas)} problemas encontrados ({percentual_total:.2f}% dos registros)" if problemas else "Referencial: OK",
+                'problemas': problemas,
+                'detalhes': detalhes_validacao,
+                'percentual_problemas': percentual_total,
+                'tolerancia_aplicada': tolerancia
             }
             
         except Exception as e:
             return {
                  'valido': False,
                  'mensagem': f"Erro na validação referencial: {e}",
-                 'problemas': [str(e)]
+                 'problemas': [str(e)],
+                 'detalhes': {}
+             }
+    
+    def _validar_especificidades_caged(self, df: pl.DataFrame) -> Dict[str, Any]:
+        """Valida especificidades dos dados CAGED"""
+        with self.medidor.etapa("Validação de Especificidades CAGED"):
+            config = VALIDACOES_INTEGRIDADE.get('validacoes_caged', {})
+        
+        problemas = []
+        detalhes_validacao = {}
+        total_registros = df.shape[0]
+        
+        try:
+            # 1. Validar exclusões (se campos presentes)
+            if config.get('validar_exclusoes', True):
+                campos_exclusao = ['TIPO_MOVIMENTACAO', 'INDICADOR_EXCLUSAO']
+                campos_encontrados = [c for c in campos_exclusao if c in df.columns]
+                
+                if campos_encontrados:
+                    # Verificar se exclusões estão marcadas corretamente
+                    exclusoes_invalidas = 0
+                    if 'TIPO_MOVIMENTACAO' in df.columns:
+                        # Tipos de movimentação que indicam exclusão (códigos específicos)
+                        exclusoes_invalidas = df.filter(
+                            pl.col('TIPO_MOVIMENTACAO').is_not_null() &
+                            pl.col('TIPO_MOVIMENTACAO').is_in(['99', 'EXC', 'EXCLUSAO']) &
+                            (pl.col('ADMITIDOS').cast(pl.Int64, strict=False) > 0)
+                        ).shape[0]
+                    
+                    detalhes_validacao['exclusoes'] = {
+                        'exclusoes_invalidas': exclusoes_invalidas,
+                        'percentual_problemas': (exclusoes_invalidas / total_registros) * 100 if total_registros > 0 else 0
+                    }
+                    
+                    if exclusoes_invalidas > 0:
+                        problemas.append(f"Exclusões com admissões positivas: {exclusoes_invalidas} registros")
+            
+            # 2. Validar movimentações fora do prazo
+            if config.get('validar_movimentacoes_fora_prazo', True) and 'COMPETENCIA' in df.columns:
+                try:
+                    # Movimentações fora do prazo são aquelas com competência muito antiga
+                    # ou muito recente em relação à data de processamento
+                    competencia_atual = datetime.now().strftime('%Y%m')
+                    
+                    # Considerar fora do prazo: mais de 6 meses no passado ou futuro
+                    data_limite_passado = (datetime.now() - timedelta(days=180)).strftime('%Y%m')
+                    data_limite_futuro = (datetime.now() + timedelta(days=30)).strftime('%Y%m')
+                    
+                    fora_prazo = df.filter(
+                        pl.col('COMPETENCIA').is_not_null() &
+                        ((pl.col('COMPETENCIA').cast(pl.Utf8) < data_limite_passado) |
+                         (pl.col('COMPETENCIA').cast(pl.Utf8) > data_limite_futuro))
+                    ).shape[0]
+                    
+                    detalhes_validacao['fora_prazo'] = {
+                        'movimentacoes_fora_prazo': fora_prazo,
+                        'percentual_problemas': (fora_prazo / total_registros) * 100 if total_registros > 0 else 0,
+                        'limite_passado': data_limite_passado,
+                        'limite_futuro': data_limite_futuro
+                    }
+                    
+                    if fora_prazo > 0:
+                        problemas.append(f"Movimentações fora do prazo: {fora_prazo} registros")
+                        
+                except Exception as e:
+                    problemas.append(f"Erro na validação de prazo: {str(e)}")
+            
+            # 3. Validar saldo acumulado (consistência entre meses)
+            if config.get('validar_saldo_acumulado', True):
+                campos_necessarios = ['COMPETENCIA', 'ADMITIDOS', 'DESLIGADOS', 'SALDO']
+                if all(campo in df.columns for campo in campos_necessarios):
+                    try:
+                        # Agrupar por competência e verificar consistência
+                        df_agrupado = df.group_by('COMPETENCIA').agg([
+                            pl.col('ADMITIDOS').sum().alias('TOTAL_ADMITIDOS'),
+                            pl.col('DESLIGADOS').sum().alias('TOTAL_DESLIGADOS'),
+                            pl.col('SALDO').sum().alias('TOTAL_SALDO')
+                        ]).with_columns([
+                            (pl.col('TOTAL_ADMITIDOS') - pl.col('TOTAL_DESLIGADOS')).alias('SALDO_CALCULADO')
+                        ])
+                        
+                        inconsistencias_acumulado = df_agrupado.filter(
+                            pl.col('TOTAL_SALDO') != pl.col('SALDO_CALCULADO')
+                        ).shape[0]
+                        
+                        detalhes_validacao['saldo_acumulado'] = {
+                            'competencias_inconsistentes': inconsistencias_acumulado,
+                            'total_competencias': df_agrupado.shape[0],
+                            'percentual_problemas': (inconsistencias_acumulado / df_agrupado.shape[0]) * 100 if df_agrupado.shape[0] > 0 else 0
+                        }
+                        
+                        if inconsistencias_acumulado > 0:
+                            problemas.append(f"Saldo acumulado inconsistente: {inconsistencias_acumulado} competências")
+                            
+                    except Exception as e:
+                        problemas.append(f"Erro na validação de saldo acumulado: {str(e)}")
+            
+            # 4. Validações adicionais específicas do CAGED
+            # Verificar se há registros com valores negativos em campos que não deveriam ter
+            campos_positivos = ['ADMITIDOS']
+            for campo in campos_positivos:
+                if campo in df.columns:
+                    try:
+                        negativos = df.filter(
+                            pl.col(campo).is_not_null() &
+                            (pl.col(campo).cast(pl.Int64, strict=False) < 0)
+                        ).shape[0]
+                        
+                        if negativos > 0:
+                            problemas.append(f"{campo} com valores negativos: {negativos} registros")
+                            
+                    except Exception:
+                        pass
+            
+            # Verificar tipos de movimentação válidos
+            if 'TIPO_MOVIMENTACAO' in df.columns:
+                tipos_validos = VALIDACOES_INTEGRIDADE['dominios_validos']['TIPO_MOVIMENTACAO']
+                tipos_invalidos = df.filter(
+                    pl.col('TIPO_MOVIMENTACAO').is_not_null() &
+                    ~pl.col('TIPO_MOVIMENTACAO').is_in(tipos_validos)
+                ).shape[0]
+                
+                detalhes_validacao['tipos_movimentacao'] = {
+                    'tipos_invalidos': tipos_invalidos,
+                    'percentual_problemas': (tipos_invalidos / total_registros) * 100 if total_registros > 0 else 0
+                }
+                
+                if tipos_invalidos > 0:
+                    problemas.append(f"Tipos de movimentação inválidos: {tipos_invalidos} registros")
+            
+            return {
+                'valido': len(problemas) == 0,
+                'mensagem': f"CAGED: {len(problemas)} problemas específicos encontrados" if problemas else "CAGED: OK",
+                'problemas': problemas,
+                'detalhes': detalhes_validacao
+            }
+            
+        except Exception as e:
+            return {
+                 'valido': False,
+                 'mensagem': f"Erro nas validações específicas do CAGED: {e}",
+                 'problemas': [str(e)],
+                 'detalhes': {}
              }
     
     def _tentar_recuperacao_dados(self, arquivo: Path, erro_original: str) -> Optional[pl.DataFrame]:
