@@ -68,6 +68,21 @@ CONFIG_PARALELISMO = {
     'retry_max': 3,  # Máximo de tentativas por arquivo
 }
 
+# Configurações de cache para consolidações - Fase 5.1
+CONFIG_CACHE = {
+    'habilitar_cache': True,  # Habilitar sistema de cache
+    'cache_consolidacao_mensal': True,  # Cache para consolidações mensais
+    'cache_consolidacao_anual': True,  # Cache para consolidações anuais
+    'cache_schemas': True,  # Cache para schemas frequentes
+    'tempo_expiracao_horas': 24,  # Tempo de expiração do cache (horas)
+    'tamanho_max_cache_mb': 512,  # Tamanho máximo do cache (MB)
+    'diretorio_cache': 'cache',  # Diretório para arquivos de cache
+    'validacao_integridade_cache': True,  # Validar integridade dos arquivos em cache
+    'limpeza_automatica': True,  # Limpeza automática de cache expirado
+    'compressao_cache': True,  # Comprimir arquivos de cache
+    'metadados_cache': True,  # Armazenar metadados do cache
+}
+
 # Configurações de encoding e separadores - Melhorias Fase 4.2
 CONFIG_ARQUIVO = {
     'encodings_fallback': ['utf-8', 'latin1', 'cp1252', 'iso-8859-1', 'utf-16', 'ascii'],
@@ -298,6 +313,12 @@ class ConversorParquetCaged:
         if self.habilitar_filtros:
             self._inicializar_sistema_filtros()
         
+        # Configurar cache - Fase 5.1
+        self.habilitar_cache = CONFIG_CACHE['habilitar_cache']
+        if self.habilitar_cache:
+            self.diretorio_cache = self.diretorio_destino / CONFIG_CACHE['diretorio_cache']
+            self.diretorio_cache.mkdir(parents=True, exist_ok=True)
+        
         # Contadores e estatísticas
         self.contador_entidades = 0
         self.estatisticas = {
@@ -306,7 +327,10 @@ class ConversorParquetCaged:
             'total_registros': 0,
             'tempo_total': 0,
             'registros_filtrados': 0,
-            'filtros_aplicados': 0
+            'filtros_aplicados': 0,
+            'cache_hits': 0,  # Fase 5.1
+            'cache_misses': 0,  # Fase 5.1
+            'consolidacoes_otimizadas': 0  # Fase 5.1
         }
         
         # Medidor de tempo
@@ -315,6 +339,7 @@ class ConversorParquetCaged:
         # Cache para schemas e mapeamentos
         self._cache_schemas = {}
         self._cache_mapeamentos = {}
+        self._cache_consolidacoes = {}  # Cache para consolidações - Fase 5.1
         
         logger.info(f"Conversor CAGED v2.0 inicializado")
         logger.info(f"Origem: {self.diretorio_origem}")
@@ -322,6 +347,7 @@ class ConversorParquetCaged:
         logger.info(f"Paralelismo: {self.habilitar_paralelismo} (workers: {self.max_workers})")
         logger.info(f"Chunk size: {self.chunk_size}")
         logger.info(f"Filtros: {self.habilitar_filtros}")
+        logger.info(f"Cache: {self.habilitar_cache}")
     
     def _calcular_chunk_size_dinamico(self, tamanho_arquivo_bytes: int, 
                                      numero_colunas: int = 50) -> int:
@@ -3074,65 +3100,432 @@ class ConversorParquetCaged:
             # Salvar resultado consolidado
             sucesso = self._salvar_resultado_mensal(dataframes, ano, mes)
             
+            # Salvar metadados de cache se habilitado - Fase 5.1
+            if sucesso and dataframes:
+                df_consolidado = pl.concat(dataframes, how="vertical")
+                self._salvar_metadados_cache_mensal(ano, mes, df_consolidado.shape)
+            
             # Atualizar estatísticas
             self.estatisticas['arquivos_processados'] += len([r for r in resultados if r['sucesso']])
             self.estatisticas['arquivos_com_erro'] += len([r for r in resultados if not r['sucesso']])
             self.estatisticas['total_registros'] += sum(df.shape[0] for df in dataframes)
             
+            logger.info(f"✅ Conversão mensal {ano}/{mes:02d} concluída")
+            logger.info(f"   📊 Arquivos processados: {len([r for r in resultados if r['sucesso']])}/{len(arquivos_origem)}")
+            logger.info(f"   📈 Total de registros: {sum(df.shape[0] for df in dataframes):,}")
+            logger.info(f"   🚀 Cache: {'Habilitado' if self.habilitar_cache else 'Desabilitado'}")
+            
             return sucesso, movimentacoes_totais, saldos_totais, indicadores_totais
     
-    def consolidar_anual(self, ano: int) -> Tuple[bool, List, List, List]:
+    # ============================================================================
+    # MÉTODOS DE CACHE - FASE 5.1
+    # ============================================================================
+    
+    def _verificar_cache_consolidacao_anual(self, ano: int) -> Optional[Tuple[bool, List, List, List]]:
         """
-        Consolida todos os meses de um ano em arquivo único
+        Verifica se existe consolidação anual em cache válido
+        
+        Args:
+            ano: Ano da consolidação
+            
+        Returns:
+            Resultado da consolidação se encontrado em cache válido, None caso contrário
+        """
+        if not self.habilitar_cache or not CONFIG_CACHE['cache_consolidacao_anual']:
+            return None
+        
+        try:
+            # Verificar arquivo de consolidação existente
+            arquivo_consolidado = self.diretorio_destino / f"CAGED_{ano}.parquet"
+            if not arquivo_consolidado.exists():
+                return None
+            
+            # Verificar metadados do cache
+            arquivo_metadados = self.diretorio_cache / f"consolidacao_anual_{ano}.json"
+            if not arquivo_metadados.exists():
+                return None
+            
+            # Carregar e validar metadados
+            import json
+            with open(arquivo_metadados, 'r') as f:
+                metadados = json.load(f)
+            
+            # Verificar se o cache não expirou
+            from datetime import datetime, timedelta
+            data_criacao = datetime.fromisoformat(metadados['data_criacao'])
+            expiracao = timedelta(hours=CONFIG_CACHE['tempo_expiracao_horas'])
+            
+            if datetime.now() - data_criacao > expiracao:
+                logger.debug(f"Cache anual {ano} expirado")
+                return None
+            
+            # Verificar integridade se habilitado
+            if CONFIG_CACHE['validacao_integridade_cache']:
+                hash_atual = self._calcular_hash_arquivo(arquivo_consolidado)
+                if hash_atual != metadados.get('hash_arquivo'):
+                    logger.warning(f"Integridade do cache anual {ano} comprometida")
+                    return None
+            
+            logger.info(f"Cache anual {ano} válido encontrado")
+            return (True, [], [], [])
+            
+        except Exception as e:
+            logger.debug(f"Erro ao verificar cache anual {ano}: {e}")
+            return None
+    
+    def _salvar_cache_consolidacao_anual(self, ano: int, resultado: Tuple[bool, List, List, List]):
+        """
+        Salva metadados da consolidação anual no cache
+        
+        Args:
+            ano: Ano da consolidação
+            resultado: Resultado da consolidação
+        """
+        if not self.habilitar_cache or not CONFIG_CACHE['cache_consolidacao_anual']:
+            return
+        
+        try:
+            import json
+            from datetime import datetime
+            
+            arquivo_consolidado = self.diretorio_destino / f"CAGED_{ano}.parquet"
+            arquivo_metadados = self.diretorio_cache / f"consolidacao_anual_{ano}.json"
+            
+            metadados = {
+                'ano': ano,
+                'data_criacao': datetime.now().isoformat(),
+                'sucesso': resultado[0],
+                'tamanho_arquivo': arquivo_consolidado.stat().st_size if arquivo_consolidado.exists() else 0,
+                'hash_arquivo': self._calcular_hash_arquivo(arquivo_consolidado) if arquivo_consolidado.exists() else None,
+                'versao_cache': '1.0'
+            }
+            
+            with open(arquivo_metadados, 'w') as f:
+                json.dump(metadados, f, indent=2)
+            
+            logger.debug(f"Metadados de cache anual {ano} salvos")
+            
+        except Exception as e:
+            logger.warning(f"Erro ao salvar cache anual {ano}: {e}")
+    
+    def _salvar_metadados_cache_mensal(self, ano: int, mes: int, shape: Tuple[int, int]):
+        """
+        Salva metadados do processamento mensal no cache
+        
+        Args:
+            ano: Ano do processamento
+            mes: Mês do processamento
+            shape: Dimensões do DataFrame (linhas, colunas)
+        """
+        if not self.habilitar_cache or not CONFIG_CACHE['metadados_cache']:
+            return
+        
+        try:
+            import json
+            from datetime import datetime
+            
+            arquivo_metadados = self.diretorio_cache / f"mensal_{ano}_{mes:02d}.json"
+            
+            metadados = {
+                'ano': ano,
+                'mes': mes,
+                'data_processamento': datetime.now().isoformat(),
+                'registros': shape[0],
+                'colunas': shape[1],
+                'versao_conversor': '2.0'
+            }
+            
+            with open(arquivo_metadados, 'w') as f:
+                json.dump(metadados, f, indent=2)
+            
+        except Exception as e:
+            logger.debug(f"Erro ao salvar metadados mensais {ano}/{mes}: {e}")
+    
+    def _calcular_hash_arquivo(self, caminho_arquivo: Path) -> str:
+        """
+        Calcula hash SHA-256 de um arquivo para validação de integridade
+        
+        Args:
+            caminho_arquivo: Caminho do arquivo
+            
+        Returns:
+            Hash SHA-256 do arquivo
+        """
+        try:
+            hash_sha256 = hashlib.sha256()
+            with open(caminho_arquivo, 'rb') as f:
+                for chunk in iter(lambda: f.read(4096), b""):
+                    hash_sha256.update(chunk)
+            return hash_sha256.hexdigest()
+        except Exception:
+            return ""
+    
+    def _carregar_arquivos_paralelo(self, arquivos: List[Path]) -> List[pl.DataFrame]:
+        """
+        Carrega arquivos Parquet em paralelo para consolidação - Fase 5.1
+        
+        Args:
+            arquivos: Lista de arquivos para carregar
+            
+        Returns:
+            Lista de DataFrames carregados
+        """
+        with self.medidor.etapa(f"Carregamento Paralelo {len(arquivos)} arquivos"):
+            dataframes = []
+            
+            # Calcular workers otimizados para leitura
+            tamanho_total_mb = sum(arquivo.stat().st_size for arquivo in arquivos) / (1024 * 1024)
+            num_workers = min(4, len(arquivos))  # Limitado para leitura de disco
+            
+            logger.info(f"Carregando {len(arquivos)} arquivos com {num_workers} workers")
+            
+            with ThreadPoolExecutor(max_workers=num_workers) as executor:
+                futures = {executor.submit(pl.read_parquet, arquivo): arquivo for arquivo in arquivos}
+                
+                for future in as_completed(futures):
+                    arquivo = futures[future]
+                    try:
+                        df = future.result()
+                        dataframes.append(df)
+                        logger.debug(f"✅ {arquivo.name} carregado: {df.shape[0]:,} registros")
+                    except Exception as e:
+                        logger.error(f"❌ Erro ao carregar {arquivo.name}: {e}")
+            
+            return dataframes
+    
+    def _carregar_arquivos_sequencial(self, arquivos: List[Path]) -> List[pl.DataFrame]:
+        """
+        Carrega arquivos Parquet sequencialmente
+        
+        Args:
+            arquivos: Lista de arquivos para carregar
+            
+        Returns:
+            Lista de DataFrames carregados
+        """
+        with self.medidor.etapa(f"Carregamento Sequencial {len(arquivos)} arquivos"):
+            dataframes = []
+            
+            for arquivo in sorted(arquivos):
+                try:
+                    logger.info(f"📊 Carregando: {arquivo.name}")
+                    df = pl.read_parquet(arquivo)
+                    dataframes.append(df)
+                    logger.debug(f"✅ {arquivo.name}: {df.shape[0]:,} registros")
+                except Exception as e:
+                    logger.error(f"❌ Erro ao carregar {arquivo.name}: {e}")
+            
+            return dataframes
+    
+    def _consolidar_dataframes_otimizado(self, dataframes: List[pl.DataFrame]) -> pl.DataFrame:
+        """
+        Consolida DataFrames com otimizações de memória - Fase 5.1
+        
+        Args:
+            dataframes: Lista de DataFrames para consolidar
+            
+        Returns:
+            DataFrame consolidado
+        """
+        with self.medidor.etapa("Consolidação Otimizada de DataFrames"):
+            if not dataframes:
+                raise ValueError("Nenhum DataFrame para consolidar")
+            
+            if len(dataframes) == 1:
+                return dataframes[0]
+            
+            # Consolidar em batches para otimizar memória
+            batch_size = 5  # Consolidar até 5 DataFrames por vez
+            resultado = dataframes[0]
+            
+            for i in range(1, len(dataframes), batch_size):
+                batch = dataframes[i:i + batch_size]
+                batch.insert(0, resultado)
+                
+                logger.debug(f"Consolidando batch {i//batch_size + 1}: {len(batch)} DataFrames")
+                resultado = pl.concat(batch, how="vertical")
+            
+            logger.info(f"Consolidação concluída: {resultado.shape[0]:,} registros, {resultado.shape[1]} colunas")
+            return resultado
+    
+    def _calcular_economia_cache(self) -> float:
+        """
+        Calcula economia de espaço/tempo proporcionada pelo cache
+        
+        Returns:
+            Economia estimada em MB
+        """
+        try:
+            if not self.habilitar_cache or not self.diretorio_cache.exists():
+                return 0.0
+            
+            # Calcular tamanho do diretório de cache
+            tamanho_cache = sum(f.stat().st_size for f in self.diretorio_cache.rglob('*') if f.is_file())
+            return tamanho_cache / (1024 * 1024)  # MB
+        except Exception:
+            return 0.0
+    
+    def exibir_estatisticas_cache(self) -> Dict[str, Any]:
+        """
+        Exibe estatísticas detalhadas do sistema de cache - Fase 5.1
+        
+        Returns:
+            Dicionário com estatísticas do cache
+        """
+        try:
+            estatisticas_cache = {
+                'cache_habilitado': self.habilitar_cache,
+                'diretorio_cache': str(self.diretorio_cache),
+                'cache_hits': self.estatisticas.get('cache_hits', 0),
+                'cache_misses': self.estatisticas.get('cache_misses', 0),
+                'consolidacoes_otimizadas': self.estatisticas.get('consolidacoes_otimizadas', 0),
+                'economia_espaco_mb': self._calcular_economia_cache(),
+                'taxa_acerto_cache': 0.0
+            }
+            
+            # Calcular taxa de acerto do cache
+            total_consultas = estatisticas_cache['cache_hits'] + estatisticas_cache['cache_misses']
+            if total_consultas > 0:
+                estatisticas_cache['taxa_acerto_cache'] = (estatisticas_cache['cache_hits'] / total_consultas) * 100
+            
+            # Contar arquivos de cache
+            if self.diretorio_cache.exists():
+                arquivos_cache = list(self.diretorio_cache.glob('*.json'))
+                estatisticas_cache['arquivos_cache_total'] = len(arquivos_cache)
+                estatisticas_cache['arquivos_cache_anual'] = len([f for f in arquivos_cache if 'consolidacao_anual' in f.name])
+                estatisticas_cache['arquivos_cache_mensal'] = len([f for f in arquivos_cache if 'mensal_' in f.name])
+            else:
+                estatisticas_cache.update({
+                    'arquivos_cache_total': 0,
+                    'arquivos_cache_anual': 0,
+                    'arquivos_cache_mensal': 0
+                })
+            
+            return estatisticas_cache
+            
+        except Exception as e:
+            logger.error(f"Erro ao calcular estatísticas de cache: {e}")
+            return {}
+    
+    def limpar_cache_expirado(self) -> int:
+        """
+        Remove arquivos de cache expirados - Fase 5.1
+        
+        Returns:
+            Número de arquivos removidos
+        """
+        if not self.habilitar_cache or not self.diretorio_cache.exists():
+            return 0
+        
+        try:
+            import json
+            from datetime import datetime, timedelta
+            
+            arquivos_removidos = 0
+            expiracao = timedelta(hours=CONFIG_CACHE['tempo_expiracao_horas'])
+            
+            for arquivo_metadados in self.diretorio_cache.glob('*.json'):
+                try:
+                    with open(arquivo_metadados, 'r') as f:
+                        metadados = json.load(f)
+                    
+                    data_criacao = datetime.fromisoformat(metadados['data_criacao'])
+                    
+                    if datetime.now() - data_criacao > expiracao:
+                        arquivo_metadados.unlink()
+                        arquivos_removidos += 1
+                        logger.debug(f"Cache expirado removido: {arquivo_metadados.name}")
+                        
+                except Exception as e:
+                    logger.debug(f"Erro ao processar {arquivo_metadados.name}: {e}")
+            
+            if arquivos_removidos > 0:
+                logger.info(f"🧹 {arquivos_removidos} arquivos de cache expirados removidos")
+            
+            return arquivos_removidos
+            
+        except Exception as e:
+            logger.error(f"Erro ao limpar cache expirado: {e}")
+            return 0
+    
+    def consolidar_anual(self, ano: int, usar_cache: bool = True, usar_paralelismo: bool = True) -> Tuple[bool, List, List, List]:
+        """
+        Consolida todos os meses de um ano em arquivo único - Otimizado Fase 5.1
         
         Args:
             ano: Ano a consolidar
+            usar_cache: Se deve usar cache para otimização
+            usar_paralelismo: Se deve usar processamento paralelo
             
         Returns:
             Tuple[bool, List[Movimentacao], List[SaldoMensal], List[Indicador]]: Resultado da consolidação
         """
-        with self.medidor.etapa(f"Consolidação Anual {ano}"):
+        # Verificar cache primeiro se habilitado
+        if usar_cache:
+            resultado_cache = self._verificar_cache_consolidacao_anual(ano)
+            if resultado_cache is not None:
+                self.estatisticas['cache_hits'] += 1
+                logger.info(f"🎯 Cache hit para consolidação anual {ano}")
+                return resultado_cache
+            else:
+                self.estatisticas['cache_misses'] += 1
+        
+        with self.medidor.etapa(f"Consolidação Anual Otimizada {ano}"):
             # Encontrar arquivos mensais do ano
             padrao = f"CAGED_{ano}_*.parquet"
             arquivos_mensais = list(self.diretorio_destino.glob(padrao))
             
             if not arquivos_mensais:
-                print(f"❌ Nenhum arquivo mensal encontrado para {ano}")
+                logger.error(f"❌ Nenhum arquivo mensal encontrado para {ano}")
                 return False, [], [], []
             
-            print(f"🎯 Consolidando {len(arquivos_mensais)} arquivos mensais de {ano}")
+            logger.info(f"🎯 Consolidando {len(arquivos_mensais)} arquivos mensais de {ano}")
             
-            # Ler e consolidar todos os arquivos mensais
-            dataframes = []
-            movimentacoes_totais = []
-            saldos_totais = []
-            indicadores_totais = []
-            
-            for arquivo in sorted(arquivos_mensais):
-                print(f"📊 Carregando: {arquivo.name}")
-                df = pl.read_parquet(arquivo)
-                dataframes.append(df)
+            # Carregar arquivos com estratégia otimizada
+            try:
+                if usar_paralelismo and len(arquivos_mensais) > 2:
+                    dataframes = self._carregar_arquivos_paralelo(arquivos_mensais)
+                else:
+                    dataframes = self._carregar_arquivos_sequencial(arquivos_mensais)
                 
-                # TODO: Carregar entidades dos arquivos se persistidas
-            
-            # Consolidar
-            df_anual = pl.concat(dataframes, how="vertical")
-            
-            # Salvar consolidado anual
-            nome_arquivo = f"CAGED_{ano}.parquet"
-            caminho_saida = self.diretorio_destino / nome_arquivo
-            
-            df_anual.write_parquet(caminho_saida)
-            
-            total_registros = df_anual.shape[0]
-            tamanho_arquivo = caminho_saida.stat().st_size / (1024 * 1024)  # MB
-            
-            print(f"✅ Consolidação anual concluída!")
-            print(f"   📄 Arquivo: {nome_arquivo}")
-            print(f"   📊 Registros: {total_registros:,}")
-            print(f"   💾 Tamanho: {tamanho_arquivo:.2f} MB")
-            
-            return True, movimentacoes_totais, saldos_totais, indicadores_totais
+                if not dataframes:
+                    logger.error(f"❌ Nenhum DataFrame carregado para {ano}")
+                    return False, [], [], []
+                
+                # Consolidar com otimizações de memória
+                df_anual = self._consolidar_dataframes_otimizado(dataframes)
+                
+                # Salvar consolidado anual
+                nome_arquivo = f"CAGED_{ano}.parquet"
+                caminho_saida = self.diretorio_destino / nome_arquivo
+                
+                with self.medidor.etapa("Salvamento Arquivo Anual"):
+                    df_anual.write_parquet(caminho_saida)
+                
+                # Calcular estatísticas
+                total_registros = df_anual.shape[0]
+                tamanho_arquivo = caminho_saida.stat().st_size / (1024 * 1024)  # MB
+                
+                # Atualizar estatísticas
+                self.estatisticas['consolidacoes_otimizadas'] += 1
+                
+                # Salvar metadados no cache se habilitado
+                resultado = (True, [], [], [])
+                if usar_cache:
+                    self._salvar_cache_consolidacao_anual(ano, resultado)
+                
+                logger.info(f"✅ Consolidação anual {ano} concluída!")
+                logger.info(f"   📄 Arquivo: {nome_arquivo}")
+                logger.info(f"   📊 Registros: {total_registros:,}")
+                logger.info(f"   💾 Tamanho: {tamanho_arquivo:.2f} MB")
+                logger.info(f"   🚀 Cache: {'Habilitado' if usar_cache else 'Desabilitado'}")
+                logger.info(f"   ⚡ Paralelismo: {'Habilitado' if usar_paralelismo else 'Desabilitado'}")
+                
+                return resultado
+                
+            except Exception as e:
+                logger.error(f"❌ Erro na consolidação anual {ano}: {e}")
+                return False, [], [], []
     
     def descompactar_mensal(self, ano: int, mes: int) -> bool:
         """

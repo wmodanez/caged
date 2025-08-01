@@ -690,6 +690,177 @@ def status():
         click.echo(f"❌ Erro ao exibir status: {e}")
 
 
+# ============================================================================
+# COMANDOS FASE 5.1 - OTIMIZAÇÕES E CACHE
+# ============================================================================
+
+@cli.command()
+@click.option('--ano', type=int, required=True, help='Ano para consolidação otimizada')
+@click.option('--sem-cache', is_flag=True, help='Desabilitar uso de cache')
+@click.option('--sem-paralelismo', is_flag=True, help='Desabilitar processamento paralelo')
+def consolidar_otimizado(ano, sem_cache, sem_paralelismo):
+    """
+    🚀 Consolidação anual otimizada com cache e paralelismo - Fase 5.1
+    
+    Exemplos:
+    \b
+    # Consolidação otimizada com cache e paralelismo
+    python main.py consolidar-otimizado --ano 2024
+    
+    # Consolidação sem cache
+    python main.py consolidar-otimizado --ano 2024 --sem-cache
+    
+    # Consolidação sequencial (sem paralelismo)
+    python main.py consolidar-otimizado --ano 2024 --sem-paralelismo
+    """
+    logger.info(f"Iniciando consolidação otimizada - Ano: {ano}, Cache: {not sem_cache}, Paralelismo: {not sem_paralelismo}")
+    
+    try:
+        conversor = ConversorParquetCaged(habilitar_cache=not sem_cache)
+        
+        click.echo(f"🚀 Consolidação otimizada do ano {ano}")
+        click.echo(f"   🎯 Cache: {'Habilitado' if not sem_cache else 'Desabilitado'}")
+        click.echo(f"   ⚡ Paralelismo: {'Habilitado' if not sem_paralelismo else 'Desabilitado'}")
+        
+        sucesso, _, _, _ = conversor.consolidar_anual(
+            ano=ano,
+            usar_cache=not sem_cache,
+            usar_paralelismo=not sem_paralelismo
+        )
+        
+        if sucesso:
+            click.echo(f"✅ Consolidação otimizada de {ano} concluída!")
+            
+            # Exibir estatísticas se cache habilitado
+            if not sem_cache:
+                estatisticas = conversor.exibir_estatisticas_cache()
+                click.echo("\n📊 Estatísticas de Cache:")
+                click.echo(f"   🎯 Cache Hits: {estatisticas.get('cache_hits', 0)}")
+                click.echo(f"   ❌ Cache Misses: {estatisticas.get('cache_misses', 0)}")
+                click.echo(f"   📈 Taxa de Acerto: {estatisticas.get('taxa_acerto_cache', 0):.1f}%")
+                click.echo(f"   💾 Economia de Espaço: {estatisticas.get('economia_espaco_mb', 0):.2f} MB")
+        else:
+            click.echo(f"❌ Falha na consolidação otimizada de {ano}")
+            
+    except Exception as e:
+        logger.error(f"Erro na consolidação otimizada: {e}")
+        click.echo(f"❌ Erro na consolidação otimizada: {e}")
+
+
+@cli.command()
+def estatisticas_cache():
+    """
+    📊 Exibe estatísticas detalhadas do sistema de cache - Fase 5.1
+    
+    Mostra informações sobre cache hits, misses, economia de espaço
+    e arquivos de cache armazenados.
+    """
+    try:
+        conversor = ConversorParquetCaged(habilitar_cache=True)
+        estatisticas = conversor.exibir_estatisticas_cache()
+        
+        click.echo("📊 Estatísticas do Sistema de Cache")
+        click.echo("=" * 40)
+        
+        if not estatisticas:
+            click.echo("❌ Nenhuma estatística de cache disponível")
+            return
+        
+        click.echo(f"🎯 Cache Habilitado: {'Sim' if estatisticas.get('cache_habilitado') else 'Não'}")
+        click.echo(f"📁 Diretório de Cache: {estatisticas.get('diretorio_cache', 'N/A')}")
+        click.echo(f"\n📈 Estatísticas de Uso:")
+        click.echo(f"   ✅ Cache Hits: {estatisticas.get('cache_hits', 0)}")
+        click.echo(f"   ❌ Cache Misses: {estatisticas.get('cache_misses', 0)}")
+        click.echo(f"   🎯 Taxa de Acerto: {estatisticas.get('taxa_acerto_cache', 0):.1f}%")
+        click.echo(f"   🚀 Consolidações Otimizadas: {estatisticas.get('consolidacoes_otimizadas', 0)}")
+        
+        click.echo(f"\n💾 Arquivos de Cache:")
+        click.echo(f"   📄 Total: {estatisticas.get('arquivos_cache_total', 0)}")
+        click.echo(f"   📅 Cache Anual: {estatisticas.get('arquivos_cache_anual', 0)}")
+        click.echo(f"   📆 Cache Mensal: {estatisticas.get('arquivos_cache_mensal', 0)}")
+        click.echo(f"   💾 Economia de Espaço: {estatisticas.get('economia_espaco_mb', 0):.2f} MB")
+        
+        click.echo("\n✅ Estatísticas exibidas!")
+        
+    except Exception as e:
+        logger.error(f"Erro ao exibir estatísticas de cache: {e}")
+        click.echo(f"❌ Erro ao exibir estatísticas de cache: {e}")
+
+
+@cli.command()
+@click.confirmation_option(prompt='Tem certeza que deseja limpar o cache expirado?')
+def limpar_cache():
+    """
+    🧹 Remove arquivos de cache expirados - Fase 5.1
+    
+    Remove automaticamente arquivos de cache que excederam
+    o tempo de expiração configurado.
+    """
+    try:
+        conversor = ConversorParquetCaged(habilitar_cache=True)
+        
+        click.echo("🧹 Limpando cache expirado...")
+        arquivos_removidos = conversor.limpar_cache_expirado()
+        
+        if arquivos_removidos > 0:
+            click.echo(f"✅ {arquivos_removidos} arquivos de cache expirados removidos")
+        else:
+            click.echo("ℹ️  Nenhum arquivo de cache expirado encontrado")
+            
+    except Exception as e:
+        logger.error(f"Erro ao limpar cache: {e}")
+        click.echo(f"❌ Erro ao limpar cache: {e}")
+
+
+@cli.command()
+@click.option('--ano', type=int, required=True, help='Ano dos dados')
+@click.option('--mes', type=int, required=True, help='Mês dos dados (1-12)')
+@click.option('--sem-cache', is_flag=True, help='Desabilitar cache')
+@click.option('--sem-paralelismo', is_flag=True, help='Desabilitar paralelismo')
+@click.option('--campos', multiple=True, help='Campos específicos a processar')
+def converter_otimizado(ano, mes, sem_cache, sem_paralelismo, campos):
+    """
+    ⚡ Conversão mensal otimizada com cache e paralelismo - Fase 5.1
+    
+    Exemplos:
+    \b
+    # Conversão otimizada com todas as funcionalidades
+    python main.py converter-otimizado --ano 2024 --mes 1
+    
+    # Conversão sem cache
+    python main.py converter-otimizado --ano 2024 --mes 1 --sem-cache
+    
+    # Conversão com campos específicos
+    python main.py converter-otimizado --ano 2024 --mes 1 --campos ADMITIDOS DESLIGADOS SALDO
+    """
+    logger.info(f"Iniciando conversão otimizada - {ano}/{mes:02d}, Cache: {not sem_cache}, Paralelismo: {not sem_paralelismo}")
+    
+    try:
+        conversor = ConversorParquetCaged(habilitar_cache=not sem_cache)
+        
+        click.echo(f"⚡ Conversão otimizada de {ano}/{mes:02d}")
+        click.echo(f"   🎯 Cache: {'Habilitado' if not sem_cache else 'Desabilitado'}")
+        click.echo(f"   ⚡ Paralelismo: {'Habilitado' if not sem_paralelismo else 'Desabilitado'}")
+        if campos:
+            click.echo(f"   📊 Campos: {', '.join(campos)}")
+        
+        sucesso, _, _, _ = conversor.converter_mensal(
+            ano=ano,
+            mes=mes,
+            campos_selecionados=list(campos) if campos else None,
+            usar_paralelismo=not sem_paralelismo
+        )
+        
+        if sucesso:
+            click.echo(f"✅ Conversão otimizada de {ano}/{mes:02d} concluída!")
+        else:
+            click.echo(f"❌ Falha na conversão otimizada de {ano}/{mes:02d}")
+            
+    except Exception as e:
+        logger.error(f"Erro na conversão otimizada: {e}")
+        click.echo(f"❌ Erro na conversão otimizada: {e}")
+
+
 if __name__ == '__main__':
     # Criar diretórios necessários se não existirem
     for dir_name in ['files-zip', 'files-unzip', 'parquet', 'logs']:

@@ -91,6 +91,52 @@ python main.py completo --ano 2024 --consolidacao-anual
 python main.py status
 ```
 
+## 🚀 Comandos Otimizados - Fase 5.1
+
+### ⚡ Conversão Otimizada
+```bash
+# Conversão mensal com cache e paralelismo
+python main.py converter-otimizado --ano 2024 --mes 1
+
+# Conversão sem cache
+python main.py converter-otimizado --ano 2024 --mes 1 --sem-cache
+
+# Conversão sequencial (sem paralelismo)
+python main.py converter-otimizado --ano 2024 --mes 1 --sem-paralelismo
+
+# Conversão com campos específicos
+python main.py converter-otimizado --ano 2024 --mes 1 --campos ADMITIDOS DESLIGADOS SALDO
+```
+
+### 🚀 Consolidação Otimizada
+```bash
+# Consolidação anual com cache e paralelismo
+python main.py consolidar-otimizado --ano 2024
+
+# Consolidação sem cache
+python main.py consolidar-otimizado --ano 2024 --sem-cache
+
+# Consolidação sequencial (sem paralelismo)
+python main.py consolidar-otimizado --ano 2024 --sem-paralelismo
+```
+
+### 📊 Gerenciamento de Cache
+```bash
+# Exibir estatísticas detalhadas do cache
+python main.py estatisticas-cache
+
+# Limpar arquivos de cache expirados
+python main.py limpar-cache
+```
+
+### 🎯 Benefícios da Fase 5.1
+
+- **⚡ Performance**: Processamento paralelo otimizado
+- **💾 Cache Inteligente**: Reutilização de dados processados
+- **📊 Estatísticas**: Monitoramento detalhado de performance
+- **🧹 Limpeza Automática**: Gerenciamento automático de cache
+- **🎛️ Controle Granular**: Opções para desabilitar cache/paralelismo
+
 ## 📁 Estrutura do Projeto
 
 ```
