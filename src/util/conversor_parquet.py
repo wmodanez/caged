@@ -390,7 +390,8 @@ class ConversorParquetCaged:
         Returns:
             Número otimizado de workers
         """
-        config = CONFIG_PARALELISMO
+        with self.medidor.etapa("Detecção de Workers Otimizados"):
+            config = CONFIG_PARALELISMO
         
         # Obter informações do sistema
         cpu_count = os.cpu_count() or 1
@@ -741,8 +742,9 @@ class ConversorParquetCaged:
         Returns:
             DataFrame filtrado
         """
-        if not self.habilitar_filtros or not self.gerenciador_filtros:
-            return df
+        with self.medidor.etapa("Aplicação de Filtros DataFrame"):
+            if not self.habilitar_filtros or not self.gerenciador_filtros:
+                return df
         
         try:
             total_antes = df.height
@@ -876,8 +878,9 @@ class ConversorParquetCaged:
             filtros_movimentacao: Tipos de movimentação para filtrar
             filtros_geograficos: Configurações de filtro geográfico
         """
-        # Habilitar sistema de filtros
-        self.habilitar_filtros = True
+        with self.medidor.etapa("Configuração de Filtros Dinâmicos"):
+            # Habilitar sistema de filtros
+            self.habilitar_filtros = True
         
         # Inicializar gerenciador se não existir
         if not self.gerenciador_filtros:
@@ -932,45 +935,46 @@ class ConversorParquetCaged:
         Returns:
             Tipo de dados Polars apropriado
         """
-        nome_upper = nome_coluna.upper()
-        
-        # Verificar padrões numéricos específicos primeiro
-        for padrao in PADROES_NUMERICOS:
-            if padrao in nome_upper:
-                tipo_sugerido = pl.Int64
-                if amostra_dados is not None:
-                    return self._validar_tipo_com_amostra(tipo_sugerido, amostra_dados, nome_coluna)
-                return tipo_sugerido
-        
-        # Verificar mapeamento automático expandido de tipos
-        for categoria, padroes in MAPEAMENTO_TIPOS_AUTOMATICO.items():
-            for padrao in padroes:
+        with self.medidor.etapa(f"Detecção de Tipo {nome_coluna}"):
+            nome_upper = nome_coluna.upper()
+            
+            # Verificar padrões numéricos específicos primeiro
+            for padrao in PADROES_NUMERICOS:
                 if padrao in nome_upper:
-                    tipo_base = SCHEMA_TIPOS_BASE.get(categoria, pl.Utf8)
-                    
-                    # Se temos amostra de dados, validar o tipo
+                    tipo_sugerido = pl.Int64
                     if amostra_dados is not None:
-                        return self._validar_tipo_com_amostra(tipo_base, amostra_dados, nome_coluna)
-                    
-                    return tipo_base
-        
-        # Padrões específicos por regex com análise de amostra
-        if re.search(r'(CNPJ|CPF|CEP|CODIGO|PIS|PASEP)', nome_upper):
-            return pl.Utf8  # IDs sempre como string
-        elif re.search(r'(VALOR|SALARIO|REMUNERACAO|PERCENTUAL|TAXA)', nome_upper):
-            tipo_sugerido = pl.Float64
-        elif re.search(r'(DATA|PERIODO|COMPETENCIA)', nome_upper):
-            tipo_sugerido = pl.Utf8
-        elif re.search(r'(QUANTIDADE|TOTAL|COUNT|SALDO)', nome_upper):
-            tipo_sugerido = pl.Int64
-        else:
-            tipo_sugerido = pl.Utf8
+                        return self._validar_tipo_com_amostra(tipo_sugerido, amostra_dados, nome_coluna)
+                    return tipo_sugerido
             
-        # Validar com amostra se disponível
-        if amostra_dados is not None:
-            return self._validar_tipo_com_amostra(tipo_sugerido, amostra_dados, nome_coluna)
+            # Verificar mapeamento automático expandido de tipos
+            for categoria, padroes in MAPEAMENTO_TIPOS_AUTOMATICO.items():
+                for padrao in padroes:
+                    if padrao in nome_upper:
+                        tipo_base = SCHEMA_TIPOS_BASE.get(categoria, pl.Utf8)
+                        
+                        # Se temos amostra de dados, validar o tipo
+                        if amostra_dados is not None:
+                            return self._validar_tipo_com_amostra(tipo_base, amostra_dados, nome_coluna)
+                        
+                        return tipo_base
             
-        return tipo_sugerido
+            # Padrões específicos por regex com análise de amostra
+            if re.search(r'(CNPJ|CPF|CEP|CODIGO|PIS|PASEP)', nome_upper):
+                return pl.Utf8  # IDs sempre como string
+            elif re.search(r'(VALOR|SALARIO|REMUNERACAO|PERCENTUAL|TAXA)', nome_upper):
+                tipo_sugerido = pl.Float64
+            elif re.search(r'(DATA|PERIODO|COMPETENCIA)', nome_upper):
+                tipo_sugerido = pl.Utf8
+            elif re.search(r'(QUANTIDADE|TOTAL|COUNT|SALDO)', nome_upper):
+                tipo_sugerido = pl.Int64
+            else:
+                tipo_sugerido = pl.Utf8
+                
+            # Validar com amostra se disponível
+            if amostra_dados is not None:
+                return self._validar_tipo_com_amostra(tipo_sugerido, amostra_dados, nome_coluna)
+                
+            return tipo_sugerido
     
     def _validar_tipo_com_amostra(self, tipo_sugerido: pl.DataType, 
                                   amostra: pl.Series, nome_coluna: str) -> pl.DataType:
@@ -1122,8 +1126,9 @@ class ConversorParquetCaged:
         Returns:
             str: Encoding válido ou None
         """
-        # Lista de fallbacks ordenada por probabilidade de sucesso
-        fallbacks = CONFIG_ARQUIVO['encodings_fallback'].copy()
+        with self.medidor.etapa(f"Fallbacks de Encoding {arquivo.name}"):
+            # Lista de fallbacks ordenada por probabilidade de sucesso
+            fallbacks = CONFIG_ARQUIVO['encodings_fallback'].copy()
         
         # Priorizar encoding original se não estiver na lista
         if encoding_original and encoding_original not in fallbacks:
@@ -2480,7 +2485,8 @@ class ConversorParquetCaged:
     
     def _validar_saldo_movimentacao(self, df: pl.DataFrame) -> Dict[str, Any]:
         """Valida se Admitidos - Desligados = Saldo"""
-        config = VALIDACOES_INTEGRIDADE['saldo_movimentacao']
+        with self.medidor.etapa("Validação de Saldo de Movimentação"):
+            config = VALIDACOES_INTEGRIDADE['saldo_movimentacao']
         
         if not all(col in df.columns for col in ['ADMITIDOS', 'DESLIGADOS', 'SALDO']):
             return {
@@ -2537,7 +2543,8 @@ class ConversorParquetCaged:
     
     def _validar_consistencia_temporal(self, df: pl.DataFrame) -> Dict[str, Any]:
         """Valida consistência de campos temporais"""
-        config = VALIDACOES_INTEGRIDADE['consistencia_temporal']
+        with self.medidor.etapa("Validação de Consistência Temporal"):
+            config = VALIDACOES_INTEGRIDADE['consistencia_temporal']
         campos_data = [c for c in config['campos_data'] if c in df.columns]
         
         if not campos_data:
@@ -2567,7 +2574,8 @@ class ConversorParquetCaged:
     
     def _validar_dominios_validos(self, df: pl.DataFrame) -> Dict[str, Any]:
         """Valida se valores estão dentro de domínios esperados"""
-        config = VALIDACOES_INTEGRIDADE['dominios_validos']
+        with self.medidor.etapa("Validação de Domínios Válidos"):
+            config = VALIDACOES_INTEGRIDADE['dominios_validos']
         problemas = []
         
         for campo, valores_validos in config.items():
@@ -2591,7 +2599,8 @@ class ConversorParquetCaged:
     
     def _validar_completude_dados(self, df: pl.DataFrame) -> Dict[str, Any]:
         """Valida completude dos dados (valores nulos)"""
-        total_registros = df.shape[0]
+        with self.medidor.etapa("Validação de Completude de Dados"):
+            total_registros = df.shape[0]
         colunas_com_problemas = []
         
         for coluna in df.columns:
@@ -2610,17 +2619,19 @@ class ConversorParquetCaged:
     
     def _calcular_checksum_dataframe(self, df: pl.DataFrame) -> str:
         """Calcula checksum MD5 do DataFrame para verificação de integridade"""
-        try:
-            # Converter DataFrame para string ordenada para checksum consistente
-            df_str = str(df.sort(df.columns).to_pandas().to_string())
-            return hashlib.md5(df_str.encode()).hexdigest()
-        except Exception as e:
-            logger.warning(f"Erro ao calcular checksum: {e}")
-            return "checksum_indisponivel"
+        with self.medidor.etapa("Cálculo de Checksum"):
+            try:
+                # Converter DataFrame para string ordenada para checksum consistente
+                df_str = str(df.sort(df.columns).to_pandas().to_string())
+                return hashlib.md5(df_str.encode()).hexdigest()
+            except Exception as e:
+                logger.warning(f"Erro ao calcular checksum: {e}")
+                return "checksum_indisponivel"
     
     def _validar_qualidade_avancada(self, df: pl.DataFrame) -> Dict[str, Any]:
         """Validação avançada de qualidade dos dados"""
-        problemas = []
+        with self.medidor.etapa("Validação de Qualidade Avançada"):
+            problemas = []
         total_registros = df.shape[0]
         
         try:
@@ -2667,7 +2678,8 @@ class ConversorParquetCaged:
     
     def _validar_consistencia_estrutural(self, df: pl.DataFrame) -> Dict[str, Any]:
         """Valida consistência estrutural dos dados"""
-        problemas = []
+        with self.medidor.etapa("Validação de Consistência Estrutural"):
+            problemas = []
         
         try:
             # 1. Verificar se campos essenciais estão presentes
@@ -2703,7 +2715,8 @@ class ConversorParquetCaged:
     
     def _validar_integridade_referencial(self, df: pl.DataFrame) -> Dict[str, Any]:
         """Valida integridade referencial entre campos relacionados"""
-        problemas = []
+        with self.medidor.etapa("Validação de Integridade Referencial"):
+            problemas = []
         
         try:
             # 1. Verificar relação UF-Município (se ambos presentes)
@@ -2753,7 +2766,8 @@ class ConversorParquetCaged:
         Returns:
             DataFrame recuperado ou None se não foi possível
         """
-        logger.warning(f"Iniciando recuperação automática para {arquivo.name}: {erro_original}")
+        with self.medidor.etapa(f"Recuperação Automática - {arquivo.name}"):
+            logger.warning(f"Iniciando recuperação automática para {arquivo.name}: {erro_original}")
         
         estrategias = [
             'encoding_alternativo',
@@ -2785,23 +2799,24 @@ class ConversorParquetCaged:
     
     def _aplicar_estrategia_recuperacao(self, arquivo: Path, estrategia: str) -> Optional[pl.DataFrame]:
         """Aplica uma estratégia específica de recuperação"""
-        
-        if estrategia == 'encoding_alternativo':
-            return self._recuperacao_encoding_alternativo(arquivo)
-        elif estrategia == 'separador_alternativo':
-            return self._recuperacao_separador_alternativo(arquivo)
-        elif estrategia == 'combinacao_alternativa':
-            return self._recuperacao_combinacao_alternativa(arquivo)
-        elif estrategia == 'leitura_permissiva':
-            return self._recuperacao_leitura_permissiva(arquivo)
-        elif estrategia == 'linha_por_linha':
-            return self._recuperacao_linha_por_linha(arquivo)
-        else:
-            return None
+        with self.medidor.etapa(f"Aplicação de Estratégia {estrategia}"):
+            if estrategia == 'encoding_alternativo':
+                return self._recuperacao_encoding_alternativo(arquivo)
+            elif estrategia == 'separador_alternativo':
+                return self._recuperacao_separador_alternativo(arquivo)
+            elif estrategia == 'combinacao_alternativa':
+                return self._recuperacao_combinacao_alternativa(arquivo)
+            elif estrategia == 'leitura_permissiva':
+                return self._recuperacao_leitura_permissiva(arquivo)
+            elif estrategia == 'linha_por_linha':
+                return self._recuperacao_linha_por_linha(arquivo)
+            else:
+                return None
     
     def _recuperacao_encoding_alternativo(self, arquivo: Path) -> Optional[pl.DataFrame]:
         """Tenta diferentes encodings para recuperar o arquivo"""
-        encodings_recuperacao = ['utf-8', 'latin1', 'cp1252', 'iso-8859-1', 'utf-16', 'ascii', 'utf-32']
+        with self.medidor.etapa("Recuperação por Encoding Alternativo"):
+            encodings_recuperacao = ['utf-8', 'latin1', 'cp1252', 'iso-8859-1', 'utf-16', 'ascii', 'utf-32']
         
         for encoding in encodings_recuperacao:
             try:
@@ -2827,7 +2842,8 @@ class ConversorParquetCaged:
     
     def _recuperacao_separador_alternativo(self, arquivo: Path) -> Optional[pl.DataFrame]:
         """Tenta diferentes separadores para recuperar o arquivo"""
-        encoding = self.detectar_encoding(arquivo)
+        with self.medidor.etapa("Recuperação por Separador Alternativo"):
+            encoding = self.detectar_encoding(arquivo)
         separadores_recuperacao = [';', ',', '\t', '|', ':', '#', ' ', '~']
         
         for separador in separadores_recuperacao:
@@ -2853,7 +2869,8 @@ class ConversorParquetCaged:
     
     def _recuperacao_combinacao_alternativa(self, arquivo: Path) -> Optional[pl.DataFrame]:
         """Tenta diferentes combinações de encoding e separador"""
-        encodings = ['utf-8', 'latin1', 'cp1252']
+        with self.medidor.etapa("Recuperação por Combinação Alternativa"):
+            encodings = ['utf-8', 'latin1', 'cp1252']
         separadores = [';', ',', '\t', '|']
         
         for encoding in encodings:
@@ -2880,112 +2897,115 @@ class ConversorParquetCaged:
     
     def _recuperacao_leitura_permissiva(self, arquivo: Path) -> Optional[pl.DataFrame]:
         """Leitura permissiva ignorando erros"""
-        try:
-            encoding = 'utf-8'
-            separador = ';'
-            
-            # Tentar leitura com máxima permissividade
-            df = pl.read_csv(
-                arquivo,
-                separator=separador,
-                encoding=encoding,
-                ignore_errors=True,
-                truncate_ragged_lines=True,
-                skip_rows_after_header=0,
-                null_values=['', 'NULL', 'null', 'NA', 'N/A', '#N/A'],
-                try_parse_dates=False
-            )
-            
-            return df if df.shape[0] > 0 else None
-            
-        except Exception as e:
-            logger.debug(f"Leitura permissiva falhou: {e}")
-            return None
-    
-    def _recuperacao_linha_por_linha(self, arquivo: Path) -> Optional[pl.DataFrame]:
-        """Lê arquivo linha por linha, ignorando linhas problemáticas"""
-        try:
-            encoding = self.detectar_encoding(arquivo)
-            linhas_validas = []
-            cabecalho = None
-            
-            with open(arquivo, 'r', encoding=encoding, errors='ignore') as f:
-                for i, linha in enumerate(f):
-                    try:
-                        linha = linha.strip()
-                        if not linha:
-                            continue
-                            
-                        if i == 0:
-                            cabecalho = linha
-                            continue
-                        
-                        # Verificar se linha tem estrutura mínima
-                        if ';' in linha or ',' in linha or '\t' in linha:
-                            linhas_validas.append(linha)
-                            
-                        # Limitar para evitar uso excessivo de memória
-                        if len(linhas_validas) > 100000:
-                            break
-                            
-                    except Exception:
-                        continue
-            
-            if cabecalho and linhas_validas:
-                # Criar arquivo temporário com linhas válidas
-                conteudo_limpo = cabecalho + '\n' + '\n'.join(linhas_validas)
+        with self.medidor.etapa("Recuperação por Leitura Permissiva"):
+            try:
+                encoding = 'utf-8'
+                separador = ';'
                 
-                # Detectar separador do conteúdo limpo
-                separador = ';' if ';' in cabecalho else (',' if ',' in cabecalho else '\t')
-                
-                # Ler usando StringIO
-                from io import StringIO
+                # Tentar leitura com máxima permissividade
                 df = pl.read_csv(
-                    StringIO(conteudo_limpo),
+                    arquivo,
                     separator=separador,
-                    ignore_errors=True
+                    encoding=encoding,
+                    ignore_errors=True,
+                    truncate_ragged_lines=True,
+                    skip_rows_after_header=0,
+                    null_values=['', 'NULL', 'null', 'NA', 'N/A', '#N/A'],
+                    try_parse_dates=False
                 )
                 
                 return df if df.shape[0] > 0 else None
-            
-        except Exception as e:
-            logger.debug(f"Recuperação linha por linha falhou: {e}")
-            return None
+                    
+            except Exception as e:
+                logger.debug(f"Leitura permissiva falhou: {e}")
+                return None
+    
+    def _recuperacao_linha_por_linha(self, arquivo: Path) -> Optional[pl.DataFrame]:
+        """Lê arquivo linha por linha, ignorando linhas problemáticas"""
+        with self.medidor.etapa("Recuperação Linha por Linha"):
+            try:
+                encoding = self.detectar_encoding(arquivo)
+                linhas_validas = []
+                cabecalho = None
+                
+                with open(arquivo, 'r', encoding=encoding, errors='ignore') as f:
+                    for i, linha in enumerate(f):
+                        try:
+                            linha = linha.strip()
+                            if not linha:
+                                continue
+                                
+                            if i == 0:
+                                cabecalho = linha
+                                continue
+                            
+                            # Verificar se linha tem estrutura mínima
+                            if ';' in linha or ',' in linha or '\t' in linha:
+                                linhas_validas.append(linha)
+                                
+                            # Limitar para evitar uso excessivo de memória
+                            if len(linhas_validas) > 100000:
+                                break
+                                
+                        except Exception:
+                            continue
+                
+                if cabecalho and linhas_validas:
+                    # Criar arquivo temporário com linhas válidas
+                    conteudo_limpo = cabecalho + '\n' + '\n'.join(linhas_validas)
+                    
+                    # Detectar separador do conteúdo limpo
+                    separador = ';' if ';' in cabecalho else (',' if ',' in cabecalho else '\t')
+                    
+                    # Ler usando StringIO
+                    from io import StringIO
+                    df = pl.read_csv(
+                        StringIO(conteudo_limpo),
+                        separator=separador,
+                        ignore_errors=True
+                    )
+                    
+                    return df if df.shape[0] > 0 else None
+                    
+            except Exception as e:
+                logger.debug(f"Recuperação linha por linha falhou: {e}")
+                return None
     
     def _validar_dados_recuperados(self, df: pl.DataFrame) -> bool:
         """Valida se os dados recuperados são utilizáveis"""
-        try:
-            # Verificações básicas
-            if df.shape[0] == 0:
+        with self.medidor.etapa("Validação de Dados Recuperados"):
+            try:
+                # Verificações básicas
+                if df.shape[0] == 0:
+                    return False
+                
+                if df.shape[1] < 3:
+                    return False
+                
+                # Verificar se há pelo menos alguns campos reconhecíveis
+                colunas_str = ' '.join(df.columns).upper()
+                campos_reconhecidos = 0
+                
+                for categoria, campos in CAMPOS_ESSENCIAIS_CAGED.items():
+                    for campo in campos:
+                        if campo in colunas_str:
+                            campos_reconhecidos += 1
+                            break
+                
+                # Pelo menos 2 campos essenciais devem estar presentes
+                if campos_reconhecidos < 2:
+                    return False
+                
+                # Verificar se não é só cabeçalho
+                if df.shape[0] < 2:
+                    return False
+                
+                logger.info(f"Dados recuperados validados: {df.shape[0]} linhas, {df.shape[1]} colunas")
+                return True
+                
+            except Exception as e:
+                logger.debug(f"Erro na validação de dados recuperados: {e}")
                 return False
-            
-            if df.shape[1] < 3:
-                return False
-            
-            # Verificar se há pelo menos alguns campos reconhecíveis
-            colunas_str = ' '.join(df.columns).upper()
-            campos_reconhecidos = 0
-            
-            for categoria, campos in CAMPOS_ESSENCIAIS_CAGED.items():
-                for campo in campos:
-                    if campo in colunas_str:
-                        campos_reconhecidos += 1
-                        break
-            
-            # Pelo menos 2 campos essenciais devem estar presentes
-            if campos_reconhecidos < 2:
-                return False
-            
-            # Verificar se não é só cabeçalho
-            if df.shape[0] < 2:
-                return False
-            
-            logger.info(f"Dados recuperados validados: {df.shape[0]} linhas, {df.shape[1]} colunas")
-            return True
-            
-        except Exception as e:
-            logger.debug(f"Erro na validação de dados recuperados: {e}")
-            return False
      
     def converter_mensal(self, 
                         ano: int, 
@@ -3071,47 +3091,48 @@ class ConversorParquetCaged:
         Returns:
             Tuple[bool, List[Movimentacao], List[SaldoMensal], List[Indicador]]: Resultado da consolidação
         """
-        # Encontrar arquivos mensais do ano
-        padrao = f"CAGED_{ano}_*.parquet"
-        arquivos_mensais = list(self.diretorio_destino.glob(padrao))
-        
-        if not arquivos_mensais:
-            print(f"❌ Nenhum arquivo mensal encontrado para {ano}")
-            return False, [], [], []
-        
-        print(f"🎯 Consolidando {len(arquivos_mensais)} arquivos mensais de {ano}")
-        
-        # Ler e consolidar todos os arquivos mensais
-        dataframes = []
-        movimentacoes_totais = []
-        saldos_totais = []
-        indicadores_totais = []
-        
-        for arquivo in sorted(arquivos_mensais):
-            print(f"📊 Carregando: {arquivo.name}")
-            df = pl.read_parquet(arquivo)
-            dataframes.append(df)
+        with self.medidor.etapa(f"Consolidação Anual {ano}"):
+            # Encontrar arquivos mensais do ano
+            padrao = f"CAGED_{ano}_*.parquet"
+            arquivos_mensais = list(self.diretorio_destino.glob(padrao))
             
-            # TODO: Carregar entidades dos arquivos se persistidas
-        
-        # Consolidar
-        df_anual = pl.concat(dataframes, how="vertical")
-        
-        # Salvar consolidado anual
-        nome_arquivo = f"CAGED_{ano}.parquet"
-        caminho_saida = self.diretorio_destino / nome_arquivo
-        
-        df_anual.write_parquet(caminho_saida)
-        
-        total_registros = df_anual.shape[0]
-        tamanho_arquivo = caminho_saida.stat().st_size / (1024 * 1024)  # MB
-        
-        print(f"✅ Consolidação anual concluída!")
-        print(f"   📄 Arquivo: {nome_arquivo}")
-        print(f"   📊 Registros: {total_registros:,}")
-        print(f"   💾 Tamanho: {tamanho_arquivo:.2f} MB")
-        
-        return True, movimentacoes_totais, saldos_totais, indicadores_totais
+            if not arquivos_mensais:
+                print(f"❌ Nenhum arquivo mensal encontrado para {ano}")
+                return False, [], [], []
+            
+            print(f"🎯 Consolidando {len(arquivos_mensais)} arquivos mensais de {ano}")
+            
+            # Ler e consolidar todos os arquivos mensais
+            dataframes = []
+            movimentacoes_totais = []
+            saldos_totais = []
+            indicadores_totais = []
+            
+            for arquivo in sorted(arquivos_mensais):
+                print(f"📊 Carregando: {arquivo.name}")
+                df = pl.read_parquet(arquivo)
+                dataframes.append(df)
+                
+                # TODO: Carregar entidades dos arquivos se persistidas
+            
+            # Consolidar
+            df_anual = pl.concat(dataframes, how="vertical")
+            
+            # Salvar consolidado anual
+            nome_arquivo = f"CAGED_{ano}.parquet"
+            caminho_saida = self.diretorio_destino / nome_arquivo
+            
+            df_anual.write_parquet(caminho_saida)
+            
+            total_registros = df_anual.shape[0]
+            tamanho_arquivo = caminho_saida.stat().st_size / (1024 * 1024)  # MB
+            
+            print(f"✅ Consolidação anual concluída!")
+            print(f"   📄 Arquivo: {nome_arquivo}")
+            print(f"   📊 Registros: {total_registros:,}")
+            print(f"   💾 Tamanho: {tamanho_arquivo:.2f} MB")
+            
+            return True, movimentacoes_totais, saldos_totais, indicadores_totais
     
     def descompactar_mensal(self, ano: int, mes: int) -> bool:
         """
@@ -3124,17 +3145,18 @@ class ConversorParquetCaged:
         Returns:
             bool: True se descompactação bem-sucedida
         """
-        diretorio_mes = self.diretorio_origem / f"{ano}" / f"{mes:02d}"
-        arquivos_7z = list(diretorio_mes.glob("*.7z"))
-        
-        print(f"🔄 Descompactando arquivos em {diretorio_mes}")
-        
-        for arquivo_7z in arquivos_7z:
-            diretorio_destino = self.diretorio_destino / f"{ano}" / f"{mes:02d}"
-            diretorio_destino.mkdir(parents=True, exist_ok=True)
-            self.descompactar_arquivo(arquivo_7z, diretorio_destino)
+        with self.medidor.etapa(f"Descompactação Mensal {ano}/{mes:02d}"):
+            diretorio_mes = self.diretorio_origem / f"{ano}" / f"{mes:02d}"
+            arquivos_7z = list(diretorio_mes.glob("*.7z"))
+            
+            print(f"🔄 Descompactando arquivos em {diretorio_mes}")
+            
+            for arquivo_7z in arquivos_7z:
+                diretorio_destino = self.diretorio_destino / f"{ano}" / f"{mes:02d}"
+                diretorio_destino.mkdir(parents=True, exist_ok=True)
+                self.descompactar_arquivo(arquivo_7z, diretorio_destino)
 
-        return True
+            return True
 
 
     def _processar_arquivos_paralelo(self, arquivos: List[Path], ano: int, mes: int, 
@@ -3142,10 +3164,11 @@ class ConversorParquetCaged:
         """
         Processa arquivos em paralelo usando ThreadPoolExecutor com balanceamento de carga
         """
-        resultados = []
-        
-        # Calcular tamanho total dos arquivos
-        tamanho_total_mb = sum(arquivo.stat().st_size for arquivo in arquivos) / (1024 * 1024)
+        with self.medidor.etapa(f"Processamento Paralelo {len(arquivos)} arquivos"):
+            resultados = []
+            
+            # Calcular tamanho total dos arquivos
+            tamanho_total_mb = sum(arquivo.stat().st_size for arquivo in arquivos) / (1024 * 1024)
         
         # Detectar número otimizado de workers
         workers_otimizados = self._detectar_workers_otimizado(len(arquivos), tamanho_total_mb)
@@ -3209,8 +3232,9 @@ class ConversorParquetCaged:
         Returns:
             Resultado do processamento
         """
-        config = CONFIG_PARALELISMO
-        max_tentativas = config['retry_max']
+        with self.medidor.etapa(f"Processamento com Retry {arquivo.name}"):
+            config = CONFIG_PARALELISMO
+            max_tentativas = config['retry_max']
         
         for tentativa in range(1, max_tentativas + 1):
             try:
@@ -3254,17 +3278,18 @@ class ConversorParquetCaged:
         """
         Processa arquivos sequencialmente
         """
-        resultados = []
-        
-        for arquivo in arquivos:
-            resultado = self._processar_arquivo_seguro(arquivo, ano, mes, campos_selecionados)
-            resultado['arquivo'] = arquivo
-            resultados.append(resultado)
+        with self.medidor.etapa(f"Processamento Sequencial {len(arquivos)} arquivos"):
+            resultados = []
             
-            if resultado['sucesso']:
-                logger.info(f"✅ {arquivo.name} processado com sucesso")
-            else:
-                logger.error(f"❌ Erro em {arquivo.name}: {resultado['erro']}")
+            for arquivo in arquivos:
+                resultado = self._processar_arquivo_seguro(arquivo, ano, mes, campos_selecionados)
+                resultado['arquivo'] = arquivo
+                resultados.append(resultado)
+                
+                if resultado['sucesso']:
+                    logger.info(f"✅ {arquivo.name} processado com sucesso")
+                else:
+                    logger.error(f"❌ Erro em {arquivo.name}: {resultado['erro']}")
         
         return resultados
     
@@ -3273,38 +3298,40 @@ class ConversorParquetCaged:
         """
         Processa um arquivo com tratamento seguro de erros
         """
-        try:
-            df, movimentacoes, saldos, indicadores = self.processar_arquivo_mensal(
-                arquivo, ano, mes, campos_selecionados
-            )
-            
-            return {
-                'sucesso': True,
-                'erro': None,
-                'df': df,
-                'movimentacoes': movimentacoes,
-                'saldos': saldos,
-                'indicadores': indicadores
-            }
-            
-        except Exception as e:
-            return {
-                'sucesso': False,
-                'erro': str(e),
-                'df': None,
-                'movimentacoes': [],
-                'saldos': [],
-                'indicadores': []
-            }
+        with self.medidor.etapa(f"Processamento Seguro {arquivo.name}"):
+            try:
+                df, movimentacoes, saldos, indicadores = self.processar_arquivo_mensal(
+                    arquivo, ano, mes, campos_selecionados
+                )
+                
+                return {
+                    'sucesso': True,
+                    'erro': None,
+                    'df': df,
+                    'movimentacoes': movimentacoes,
+                    'saldos': saldos,
+                    'indicadores': indicadores
+                }
+                
+            except Exception as e:
+                return {
+                    'sucesso': False,
+                    'erro': str(e),
+                    'df': None,
+                    'movimentacoes': [],
+                    'saldos': [],
+                    'indicadores': []
+                }
     
     def _consolidar_resultados(self, resultados: List[Dict[str, Any]]) -> Tuple[List, List, List, List]:
         """
         Consolida resultados de múltiplos arquivos
         """
-        dataframes = []
-        movimentacoes_totais = []
-        saldos_totais = []
-        indicadores_totais = []
+        with self.medidor.etapa("Consolidação de Resultados"):
+            dataframes = []
+            movimentacoes_totais = []
+            saldos_totais = []
+            indicadores_totais = []
         
         for resultado in resultados:
             if resultado['sucesso'] and resultado['df'] is not None:
