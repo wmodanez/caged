@@ -1034,53 +1034,54 @@ class ConversorParquetCaged:
         Returns:
             str: Encoding detectado
         """
-        tentativas = 0
-        max_tentativas = CONFIG_ARQUIVO['tentativas_max_encoding']
-        
-        while tentativas < max_tentativas:
-            try:
-                import chardet
-                
-                # Ler amostra otimizada para melhor detecção
-                tamanho_amostra = CONFIG_ARQUIVO['tamanho_amostra_encoding']
-                with open(arquivo, 'rb') as f:
-                    raw_data = f.read(tamanho_amostra)
-                
-                # Detecção primária com chardet
-                result = chardet.detect(raw_data)
-                encoding = result.get('encoding', 'latin1')
-                confidence = result.get('confidence', 0)
-                
-                logger.debug(f"Encoding detectado: {encoding} (confiança: {confidence:.2f}, tentativa: {tentativas + 1})")
-                
-                # Validação do encoding detectado
-                if confidence >= CONFIG_ARQUIVO['confianca_encoding_min']:
-                    if self._validar_encoding(arquivo, encoding):
-                        logger.info(f"✅ Encoding validado: {encoding} (confiança: {confidence:.2f})")
-                        return encoding
-                    else:
-                        logger.warning(f"⚠️  Encoding {encoding} falhou na validação")
-                
-                # Sistema de fallbacks inteligente
-                encoding_fallback = self._aplicar_fallbacks_encoding(arquivo, encoding)
-                if encoding_fallback:
-                    return encoding_fallback
-                
-                tentativas += 1
-                if tentativas < max_tentativas:
-                    logger.warning(f"Tentativa {tentativas} falhou, tentando novamente...")
-                    time.sleep(0.1)  # Pequena pausa entre tentativas
-                
-            except ImportError:
-                logger.warning("chardet não disponível, usando fallbacks manuais")
-                return self._fallback_encoding_manual(arquivo)
-            except Exception as e:
-                logger.error(f"Erro na detecção de encoding (tentativa {tentativas + 1}): {e}")
-                tentativas += 1
-        
-        # Fallback final
-        logger.error(f"❌ Falha na detecção após {max_tentativas} tentativas, usando latin1")
-        return 'latin1'
+        with self.medidor.etapa(f"Detecção de Encoding - {arquivo.name}"):
+            tentativas = 0
+            max_tentativas = CONFIG_ARQUIVO['tentativas_max_encoding']
+            
+            while tentativas < max_tentativas:
+                try:
+                    import chardet
+                    
+                    # Ler amostra otimizada para melhor detecção
+                    tamanho_amostra = CONFIG_ARQUIVO['tamanho_amostra_encoding']
+                    with open(arquivo, 'rb') as f:
+                        raw_data = f.read(tamanho_amostra)
+                    
+                    # Detecção primária com chardet
+                    result = chardet.detect(raw_data)
+                    encoding = result.get('encoding', 'latin1')
+                    confidence = result.get('confidence', 0)
+                    
+                    logger.debug(f"Encoding detectado: {encoding} (confiança: {confidence:.2f}, tentativa: {tentativas + 1})")
+                    
+                    # Validação do encoding detectado
+                    if confidence >= CONFIG_ARQUIVO['confianca_encoding_min']:
+                        if self._validar_encoding(arquivo, encoding):
+                            logger.info(f"✅ Encoding validado: {encoding} (confiança: {confidence:.2f})")
+                            return encoding
+                        else:
+                            logger.warning(f"⚠️  Encoding {encoding} falhou na validação")
+                    
+                    # Sistema de fallbacks inteligente
+                    encoding_fallback = self._aplicar_fallbacks_encoding(arquivo, encoding)
+                    if encoding_fallback:
+                        return encoding_fallback
+                    
+                    tentativas += 1
+                    if tentativas < max_tentativas:
+                        logger.warning(f"Tentativa {tentativas} falhou, tentando novamente...")
+                        time.sleep(0.1)  # Pequena pausa entre tentativas
+                    
+                except ImportError:
+                    logger.warning("chardet não disponível, usando fallbacks manuais")
+                    return self._fallback_encoding_manual(arquivo)
+                except Exception as e:
+                    logger.error(f"Erro na detecção de encoding (tentativa {tentativas + 1}): {e}")
+                    tentativas += 1
+            
+            # Fallback final
+            logger.error(f"❌ Falha na detecção após {max_tentativas} tentativas, usando latin1")
+            return 'latin1'
     
     def _validar_encoding(self, arquivo: Path, encoding: str) -> bool:
         """
@@ -1439,130 +1440,137 @@ class ConversorParquetCaged:
         """
         Processa arquivo grande em chunks para otimizar uso de memória
         """
-        try:
-            # Primeiro, ler apenas o cabeçalho para determinar as colunas
+        nome_arquivo = arquivo.name
+        with self.medidor.etapa(f"Processamento em Chunks - {nome_arquivo}"):
             try:
-                df_header = pl.read_csv(
-                    arquivo,
-                    separator=separador,
-                    encoding=encoding,
-                    has_header=True,
-                    n_rows=1
-                )
-            except Exception as e_header:
-                logger.warning(f"Erro ao ler cabeçalho: {e_header}")
-                
-                # Tentar recuperação automática para cabeçalho
-                if CONFIG_ARQUIVO.get('recuperacao_automatica_habilitada', True):
-                    logger.warning("🔧 Tentando recuperação automática para cabeçalho...")
-                    df_recuperado = self._tentar_recuperacao_dados(arquivo, str(e_header))
+                # Primeiro, ler apenas o cabeçalho para determinar as colunas
+                try:
+                    df_header = pl.read_csv(
+                        arquivo,
+                        separator=separador,
+                        encoding=encoding,
+                        has_header=True,
+                        n_rows=1
+                    )
+                except Exception as e_header:
+                    logger.warning(f"Erro ao ler cabeçalho: {e_header}")
                     
-                    if df_recuperado is not None:
-                        df_header = df_recuperado.head(1)
-                        logger.success("✅ Cabeçalho recuperado com sucesso!")
+                    # Tentar recuperação automática para cabeçalho
+                    if CONFIG_ARQUIVO.get('recuperacao_automatica_habilitada', True):
+                        logger.warning("🔧 Tentando recuperação automática para cabeçalho...")
+                        df_recuperado = self._tentar_recuperacao_dados(arquivo, str(e_header))
+                        
+                        if df_recuperado is not None:
+                            df_header = df_recuperado.head(1)
+                            logger.success("✅ Cabeçalho recuperado com sucesso!")
+                        else:
+                            logger.error("❌ Falha na recuperação do cabeçalho")
+                            raise e_header
                     else:
-                        logger.error("❌ Falha na recuperação do cabeçalho")
                         raise e_header
-                else:
-                    raise e_header
-            
-            numero_colunas = df_header.shape[1]
-            tamanho_arquivo = arquivo.stat().st_size
-            
-            # Calcular chunk size dinâmico
-            chunk_size = self._calcular_chunk_size_dinamico(tamanho_arquivo, numero_colunas)
-            chunk_size = self._ajustar_chunk_size_para_memoria(chunk_size, numero_colunas)
-            
-            logger.info(f"Processamento em chunks: {chunk_size:,} linhas por chunk")
-            
-            # Listas para acumular resultados
-            dataframes_chunks = []
-            movimentacoes_total = []
-            saldos_mensais_total = []
-            indicadores_total = []
-            
-            chunk_num = 0
-            linhas_processadas = 0
-            
-            # Ler arquivo em chunks usando scan_csv para eficiência
-            try:
-                # Usar lazy frame para leitura eficiente
-                lazy_df = pl.scan_csv(
-                    arquivo,
-                    separator=separador,
-                    encoding=encoding,
-                    has_header=True,
-                    ignore_errors=True,
-                    truncate_ragged_lines=True
-                )
                 
-                # Obter total de linhas para barra de progresso
-                total_linhas = lazy_df.select(pl.count()).collect().item()
-                num_chunks = (total_linhas + chunk_size - 1) // chunk_size
+                numero_colunas = df_header.shape[1]
+                tamanho_arquivo = arquivo.stat().st_size
                 
-                logger.info(f"Total de linhas: {total_linhas:,}, chunks: {num_chunks}")
+                # Calcular chunk size dinâmico
+                chunk_size = self._calcular_chunk_size_dinamico(tamanho_arquivo, numero_colunas)
+                chunk_size = self._ajustar_chunk_size_para_memoria(chunk_size, numero_colunas)
                 
-                # Processar cada chunk
-                from tqdm import tqdm
+                logger.info(f"Processamento em chunks: {chunk_size:,} linhas por chunk")
                 
-                with tqdm(total=num_chunks, desc="Processando chunks", unit="chunk") as pbar:
-                    
-                    for chunk_start in range(0, total_linhas, chunk_size):
-                        chunk_end = min(chunk_start + chunk_size, total_linhas)
-                        chunk_num += 1
-                        
-                        # Ler chunk específico
-                        df_chunk = lazy_df.slice(chunk_start, chunk_size).collect()
-                        
-                        if df_chunk.shape[0] == 0:
-                            continue
-                        
-                        # Processar chunk
-                        df_processado = self._processar_chunk_individual(
-                            df_chunk, arquivo, ano, mes, campos_selecionados
+                # Listas para acumular resultados
+                dataframes_chunks = []
+                movimentacoes_total = []
+                saldos_mensais_total = []
+                indicadores_total = []
+                
+                chunk_num = 0
+                linhas_processadas = 0
+                
+                # Ler arquivo em chunks usando scan_csv para eficiência
+                try:
+                    # Usar lazy frame para leitura eficiente
+                    lazy_df = pl.scan_csv(
+                        arquivo,
+                        separator=separador,
+                        encoding=encoding,
+                        has_header=True,
+                        ignore_errors=True,
+                        truncate_ragged_lines=True
                         )
+                    
+                    # Obter total de linhas para barra de progresso
+                    total_linhas = lazy_df.select(pl.count()).collect().item()
+                    num_chunks = (total_linhas + chunk_size - 1) // chunk_size
+                    
+                    logger.info(f"Total de linhas: {total_linhas:,}, chunks: {num_chunks}")
+                    
+                    # Processar cada chunk
+                    from tqdm import tqdm
+                    
+                    with tqdm(total=num_chunks, desc="Processando chunks", unit="chunk") as pbar:
                         
-                        if df_processado.shape[0] > 0:
-                            dataframes_chunks.append(df_processado)
+                        for chunk_start in range(0, total_linhas, chunk_size):
+                            chunk_end = min(chunk_start + chunk_size, total_linhas)
+                            chunk_num += 1
                             
-                            # Converter chunk para entidades
-                            try:
-                                mov_chunk = self._dataframe_para_movimentacoes(df_processado, ano, mes)
-                                saldos_chunk = self._calcular_saldos_mensais(df_processado, ano, mes)
-                                ind_chunk = self._gerar_indicadores(df_processado, ano, mes)
+                            # Ler chunk específico
+                            df_chunk = lazy_df.slice(chunk_start, chunk_size).collect()
+                            
+                            if df_chunk.shape[0] == 0:
+                                continue
+                            
+                            # Processar chunk
+                            df_processado = self._processar_chunk_individual(
+                                df_chunk, arquivo, ano, mes, campos_selecionados
+                            )
+                            
+                            if df_processado.shape[0] > 0:
+                                dataframes_chunks.append(df_processado)
                                 
-                                movimentacoes_total.extend(mov_chunk)
-                                saldos_mensais_total.extend(saldos_chunk)
-                                indicadores_total.extend(ind_chunk)
-                                
-                            except Exception as e:
-                                logger.warning(f"Erro ao processar entidades do chunk {chunk_num}: {e}")
+                                # Converter chunk para entidades
+                                try:
+                                    mov_chunk = self._dataframe_para_movimentacoes(df_processado, ano, mes)
+                                    saldos_chunk = self._calcular_saldos_mensais(df_processado, ano, mes)
+                                    ind_chunk = self._gerar_indicadores(df_processado, ano, mes)
+                                    
+                                    movimentacoes_total.extend(mov_chunk)
+                                    saldos_mensais_total.extend(saldos_chunk)
+                                    indicadores_total.extend(ind_chunk)
+                                    
+                                except Exception as e:
+                                    logger.warning(f"Erro ao processar entidades do chunk {chunk_num}: {e}")
+                            
+                            linhas_processadas += df_chunk.shape[0]
+                            pbar.update(1)
+                            pbar.set_postfix({
+                                'linhas': f"{linhas_processadas:,}",
+                                'chunk': f"{chunk_num}/{num_chunks}"
+                            })
+                    
+                    # Consolidar todos os chunks em um DataFrame final
+                    if dataframes_chunks:
+                        logger.info(f"Consolidando {len(dataframes_chunks)} chunks...")
+                        df_final = pl.concat(dataframes_chunks, how="vertical")
                         
-                        linhas_processadas += df_chunk.shape[0]
-                        pbar.update(1)
-                        pbar.set_postfix({
-                            'linhas': f"{linhas_processadas:,}",
-                            'chunk': f"{chunk_num}/{num_chunks}"
-                        })
-                
-                # Consolidar todos os chunks em um DataFrame final
-                if dataframes_chunks:
-                    logger.info(f"Consolidando {len(dataframes_chunks)} chunks...")
-                    df_final = pl.concat(dataframes_chunks, how="vertical")
-                    
-                    # Validar integridade dos dados consolidados
-                    if self.validar_integridade_dados(df_final):
-                        logger.info("✅ Dados consolidados validados com sucesso")
+                        # Validar integridade dos dados consolidados
+                        if self.validar_integridade_dados(df_final):
+                            logger.info("✅ Dados consolidados validados com sucesso")
+                        else:
+                            logger.warning("⚠️  Alertas encontrados na validação dos dados consolidados")
+                        
+                        logger.info(f"Processamento em chunks concluído: {df_final.shape[0]:,} registros")
+                        
+                        return df_final, movimentacoes_total, saldos_mensais_total, indicadores_total
                     else:
-                        logger.warning("⚠️  Alertas encontrados na validação dos dados consolidados")
+                        logger.warning("Nenhum chunk válido processado")
+                        return pl.DataFrame(), [], [], []
                     
-                    logger.info(f"Processamento em chunks concluído: {df_final.shape[0]:,} registros")
-                    
-                    return df_final, movimentacoes_total, saldos_mensais_total, indicadores_total
-                else:
-                    logger.warning("Nenhum chunk válido processado")
-                    return pl.DataFrame(), [], [], []
-                    
+                except Exception as e:
+                    logger.error(f"Erro ao processar com scan_csv: {e}")
+                    # Re-raise para ser capturado pelo except externo
+                    raise e
+                
             except Exception as e:
                 logger.error(f"Erro no processamento em chunks: {e}")
                 
@@ -1599,39 +1607,6 @@ class ConversorParquetCaged:
                 # Fallback para processamento direto
                 logger.info("Tentando processamento direto como fallback...")
                 return self._processar_arquivo_direto(arquivo, ano, mes, encoding, separador, campos_selecionados)
-                
-        except Exception as e:
-            logger.error(f"❌ Erro crítico no processamento em chunks: {e}")
-            
-            # Última tentativa de recuperação automática
-            if CONFIG_ARQUIVO.get('recuperacao_automatica_habilitada', True):
-                logger.warning("🔧 Última tentativa de recuperação automática...")
-                df_recuperado = self._tentar_recuperacao_dados(arquivo, str(e))
-                
-                if df_recuperado is not None:
-                    logger.success("✅ Recuperação automática crítica bem-sucedida!")
-                    
-                    try:
-                        df_processado = self._processar_chunk_individual(
-                            df_recuperado, arquivo, ano, mes, campos_selecionados
-                        )
-                        
-                        if df_processado.shape[0] > 0:
-                            movimentacoes = self._dataframe_para_movimentacoes(df_processado, ano, mes)
-                            saldos_mensais = self._calcular_saldos_mensais(df_processado, ano, mes)
-                            indicadores = self._gerar_indicadores(df_processado, ano, mes)
-                            
-                            logger.info(f"✅ Recuperação crítica processada: {df_processado.shape[0]:,} registros")
-                            return df_processado, movimentacoes, saldos_mensais, indicadores
-                            
-                    except Exception as e_critica:
-                        logger.error(f"❌ Erro na recuperação crítica: {e_critica}")
-                        raise e  # Relançar erro original
-                else:
-                    logger.error("❌ Recuperação automática crítica falhou")
-                    raise e  # Relançar erro original
-            else:
-                raise e  # Relançar erro original
     
     def _processar_chunk_individual(self, df_chunk: pl.DataFrame, arquivo: Path, 
                                   ano: int, mes: int,
@@ -1639,40 +1614,41 @@ class ConversorParquetCaged:
         """
         Processa um chunk individual aplicando todas as transformações necessárias
         """
-        try:
-            # Padronizar colunas
-            df_processado = self._padronizar_colunas(df_chunk, arquivo)
+        with self.medidor.etapa("Processamento de Chunk Individual"):
+            try:
+                # Padronizar colunas
+                df_processado = self._padronizar_colunas(df_chunk, arquivo)
             
-            # Filtrar campos se especificado
-            if campos_selecionados:
-                campos_disponiveis = [c for c in campos_selecionados if c in df_processado.columns]
-                if campos_disponiveis:
-                    df_processado = df_processado.select(campos_disponiveis)
-            
-            # Aplicar tipos de dados
-            df_processado = self._aplicar_tipos_dados(df_processado)
-            
-            # Adicionar colunas de controle
-            df_processado = df_processado.with_columns([
-                pl.lit(f"{ano}-{mes:02d}").alias("ANO_MES"),
-                pl.lit(ano).alias("ANO"),
-                pl.lit(mes).alias("MES")
-            ])
-            
-            # Aplicar filtros se habilitados (para chunks)
-            if self.habilitar_filtros and self.gerenciador_filtros:
-                registros_antes = df_processado.shape[0]
-                df_processado = self._aplicar_filtros_dataframe(df_processado)
-                registros_depois = df_processado.shape[0]
-                registros_filtrados = registros_antes - registros_depois
+                # Filtrar campos se especificado
+                if campos_selecionados:
+                    campos_disponiveis = [c for c in campos_selecionados if c in df_processado.columns]
+                    if campos_disponiveis:
+                        df_processado = df_processado.select(campos_disponiveis)
                 
-                self.estatisticas['registros_filtrados'] += registros_filtrados
-            
-            return df_processado
-            
-        except Exception as e:
-            logger.error(f"Erro ao processar chunk individual: {e}")
-            return pl.DataFrame()
+                # Aplicar tipos de dados
+                df_processado = self._aplicar_tipos_dados(df_processado)
+                
+                # Adicionar colunas de controle
+                df_processado = df_processado.with_columns([
+                    pl.lit(f"{ano}-{mes:02d}").alias("ANO_MES"),
+                    pl.lit(ano).alias("ANO"),
+                    pl.lit(mes).alias("MES")
+                ])
+                
+                # Aplicar filtros se habilitados (para chunks)
+                if self.habilitar_filtros and self.gerenciador_filtros:
+                    registros_antes = df_processado.shape[0]
+                    df_processado = self._aplicar_filtros_dataframe(df_processado)
+                    registros_depois = df_processado.shape[0]
+                    registros_filtrados = registros_antes - registros_depois
+                    
+                    self.estatisticas['registros_filtrados'] += registros_filtrados
+                
+                return df_processado
+                
+            except Exception as e:
+                logger.error(f"Erro ao processar chunk individual: {e}")
+                return pl.DataFrame()
     
     def _dataframe_para_movimentacoes(self, df: pl.DataFrame, ano: int, mes: int) -> List[Movimentacao]:
         """
@@ -1686,35 +1662,36 @@ class ConversorParquetCaged:
         Returns:
             List[Movimentacao]: Lista de movimentações
         """
-        movimentacoes = []
-        competencia = f"{ano}-{mes:02d}"
-        
-        # Mapear campos do DataFrame para a entidade
-        for row in df.iter_rows(named=True):
-            self.contador_entidades += 1
+        with self.medidor.etapa("Conversão para Movimentações"):
+            movimentacoes = []
+            competencia = f"{ano}-{mes:02d}"
             
-            # Determinar tipo de movimentação baseado nos campos disponíveis
-            tipo_movimentacao = self._determinar_tipo_movimentacao(row)
+            # Mapear campos do DataFrame para a entidade
+            for row in df.iter_rows(named=True):
+                self.contador_entidades += 1
+                
+                # Determinar tipo de movimentação baseado nos campos disponíveis
+                tipo_movimentacao = self._determinar_tipo_movimentacao(row)
+                
+                # Extrair CPF se disponível
+                cpf = row.get('CPF', '') or row.get('CPF_TRABALHADOR', '') or ''
+                
+                # Extrair CNPJ se disponível
+                cnpj = row.get('CNPJ', '') or row.get('CNPJ_CEI', '') or ''
+                
+                movimentacao = Movimentacao(
+                    id=self.contador_entidades,
+                    cnpj=cnpj,
+                    cpf=cpf,
+                    competencia=competencia,
+                    tipo_movimentacao=tipo_movimentacao,
+                    data_movimentacao=self._extrair_data_movimentacao(row)
+                )
+                
+                movimentacoes.append(movimentacao)
             
-            # Extrair CPF se disponível
-            cpf = row.get('CPF', '') or row.get('CPF_TRABALHADOR', '') or ''
-            
-            # Extrair CNPJ se disponível
-            cnpj = row.get('CNPJ', '') or row.get('CNPJ_CEI', '') or ''
-            
-            movimentacao = Movimentacao(
-                id=self.contador_entidades,
-                cnpj=cnpj,
-                cpf=cpf,
-                competencia=competencia,
-                tipo_movimentacao=tipo_movimentacao,
-                data_movimentacao=self._extrair_data_movimentacao(row)
-            )
-            
-            movimentacoes.append(movimentacao)
-        
-        print(f"📊 Criadas {len(movimentacoes)} movimentações")
-        return movimentacoes
+            print(f"📊 Criadas {len(movimentacoes)} movimentações")
+            return movimentacoes
     
     def _determinar_tipo_movimentacao(self, row: Dict) -> str:
         """
@@ -1786,55 +1763,56 @@ class ConversorParquetCaged:
         Returns:
             List[SaldoMensal]: Lista de saldos mensais
         """
-        saldos = []
-        competencia = f"{ano}-{mes:02d}"
-        
-        # Agrupar por CNPJ se disponível
-        if 'CNPJ' in df.columns:
-            # Agrupar por CNPJ e calcular totais
-            df_agrupado = df.group_by('CNPJ').agg([
-                pl.sum('ADMITIDOS').alias('total_admissoes'),
-                pl.sum('DESLIGADOS').alias('total_desligamentos'),
-                pl.sum('SALDO').alias('saldo_total')
-            ])
+        with self.medidor.etapa("Cálculo de Saldos Mensais"):
+            saldos = []
+            competencia = f"{ano}-{mes:02d}"
             
-            for row in df_agrupado.iter_rows(named=True):
-                self.contador_entidades += 1
+            # Agrupar por CNPJ se disponível
+            if 'CNPJ' in df.columns:
+                # Agrupar por CNPJ e calcular totais
+                df_agrupado = df.group_by('CNPJ').agg([
+                    pl.sum('ADMITIDOS').alias('total_admissoes'),
+                    pl.sum('DESLIGADOS').alias('total_desligamentos'),
+                    pl.sum('SALDO').alias('saldo_total')
+                ])
                 
+                for row in df_agrupado.iter_rows(named=True):
+                    self.contador_entidades += 1
+                    
+                    saldo = SaldoMensal(
+                        id=self.contador_entidades,
+                        cnpj=row['CNPJ'],
+                        competencia=competencia,
+                        saldo=row['saldo_total'] or 0,
+                        admissoes=row['total_admissoes'] or 0,
+                        desligamentos=row['total_desligamentos'] or 0,
+                        exc_admissoes=0,  # Seria calculado se houvesse dados de exclusão
+                        exc_desligamentos=0
+                    )
+                    
+                    saldos.append(saldo)
+            else:
+                # Calcular totais gerais se não houver CNPJ
+                total_admissoes = df.select(pl.sum('ADMITIDOS')).item() or 0
+                total_desligamentos = df.select(pl.sum('DESLIGADOS')).item() or 0
+                saldo_total = df.select(pl.sum('SALDO')).item() or 0
+                
+                self.contador_entidades += 1
                 saldo = SaldoMensal(
                     id=self.contador_entidades,
-                    cnpj=row['CNPJ'],
+                    cnpj="",  # CNPJ geral
                     competencia=competencia,
-                    saldo=row['saldo_total'] or 0,
-                    admissoes=row['total_admissoes'] or 0,
-                    desligamentos=row['total_desligamentos'] or 0,
-                    exc_admissoes=0,  # Seria calculado se houvesse dados de exclusão
+                    saldo=saldo_total,
+                    admissoes=total_admissoes,
+                    desligamentos=total_desligamentos,
+                    exc_admissoes=0,
                     exc_desligamentos=0
                 )
                 
                 saldos.append(saldo)
-        else:
-            # Calcular totais gerais se não houver CNPJ
-            total_admissoes = df.select(pl.sum('ADMITIDOS')).item() or 0
-            total_desligamentos = df.select(pl.sum('DESLIGADOS')).item() or 0
-            saldo_total = df.select(pl.sum('SALDO')).item() or 0
             
-            self.contador_entidades += 1
-            saldo = SaldoMensal(
-                id=self.contador_entidades,
-                cnpj="",  # CNPJ geral
-                competencia=competencia,
-                saldo=saldo_total,
-                admissoes=total_admissoes,
-                desligamentos=total_desligamentos,
-                exc_admissoes=0,
-                exc_desligamentos=0
-            )
-            
-            saldos.append(saldo)
-        
-        print(f"📊 Calculados {len(saldos)} saldos mensais")
-        return saldos
+            print(f"📊 Calculados {len(saldos)} saldos mensais")
+            return saldos
     
     def _gerar_indicadores(self, df: pl.DataFrame, ano: int, mes: int) -> List[Indicador]:
         """
@@ -1848,43 +1826,44 @@ class ConversorParquetCaged:
         Returns:
             List[Indicador]: Lista de indicadores
         """
-        indicadores = []
-        competencia = f"{ano}-{mes:02d}"
-        
-        # Calcular indicadores básicos
-        total_registros = df.shape[0]
-        total_admissoes = df.select(pl.sum('ADMITIDOS')).item() or 0
-        total_desligamentos = df.select(pl.sum('DESLIGADOS')).item() or 0
-        saldo_total = df.select(pl.sum('SALDO')).item() or 0
-        
-        # Taxa de rotatividade (se houver dados suficientes)
-        if total_admissoes + total_desligamentos > 0:
-            taxa_rotatividade = ((total_admissoes + total_desligamentos) / 2) / max(saldo_total, 1) * 100
-        else:
-            taxa_rotatividade = 0
-        
-        # Criar indicadores
-        indicadores_dados = [
-            ("total_registros", total_registros),
-            ("total_admissoes", total_admissoes),
-            ("total_desligamentos", total_desligamentos),
-            ("saldo_total", saldo_total),
-            ("taxa_rotatividade", taxa_rotatividade)
-        ]
-        
-        for nome, valor in indicadores_dados:
-            self.contador_entidades += 1
-            indicador = Indicador(
-                id=self.contador_entidades,
-                cnpj="",  # Indicador geral
-                competencia=competencia,
-                nome_indicador=nome,
-                valor=float(valor)
-            )
-            indicadores.append(indicador)
-        
-        print(f"📊 Gerados {len(indicadores)} indicadores")
-        return indicadores
+        with self.medidor.etapa("Geração de Indicadores"):
+            indicadores = []
+            competencia = f"{ano}-{mes:02d}"
+            
+            # Calcular indicadores básicos
+            total_registros = df.shape[0]
+            total_admissoes = df.select(pl.sum('ADMITIDOS')).item() or 0
+            total_desligamentos = df.select(pl.sum('DESLIGADOS')).item() or 0
+            saldo_total = df.select(pl.sum('SALDO')).item() or 0
+            
+            # Taxa de rotatividade (se houver dados suficientes)
+            if total_admissoes + total_desligamentos > 0:
+                taxa_rotatividade = ((total_admissoes + total_desligamentos) / 2) / max(saldo_total, 1) * 100
+            else:
+                taxa_rotatividade = 0
+            
+            # Criar indicadores
+            indicadores_dados = [
+                ("total_registros", total_registros),
+                ("total_admissoes", total_admissoes),
+                ("total_desligamentos", total_desligamentos),
+                ("saldo_total", saldo_total),
+                ("taxa_rotatividade", taxa_rotatividade)
+            ]
+            
+            for nome, valor in indicadores_dados:
+                self.contador_entidades += 1
+                indicador = Indicador(
+                    id=self.contador_entidades,
+                    cnpj="",  # Indicador geral
+                    competencia=competencia,
+                    nome_indicador=nome,
+                    valor=float(valor)
+                )
+                indicadores.append(indicador)
+            
+            print(f"📊 Gerados {len(indicadores)} indicadores")
+            return indicadores
     
     def _detectar_separador(self, arquivo: Path, encoding: str) -> str:
         """
@@ -1898,64 +1877,65 @@ class ConversorParquetCaged:
         Returns:
             str: Separador detectado
         """
-        try:
-            # Validar integridade do arquivo antes da detecção
-            if CONFIG_ARQUIVO['validacao_integridade_habilitada']:
-                if not self._validar_integridade_arquivo(arquivo):
-                    logger.warning("⚠️  Arquivo pode estar corrompido, procedendo com cautela")
-            
-            with open(arquivo, 'r', encoding=encoding) as f:
-                # Ler amostra maior para análise mais robusta
-                linhas = []
-                for i in range(min(20, 2000)):  # Aumentado de 5 para 20 linhas
-                    linha = f.readline().strip()
-                    if linha and len(linha) > 10:  # Filtrar linhas muito curtas
-                        linhas.append(linha)
-                    if len(linhas) >= 15:  # Parar quando tiver linhas suficientes
-                        break
-            
-            if not linhas:
-                logger.warning("Arquivo vazio ou sem linhas válidas")
-                return self._fallback_separador_inteligente(arquivo, encoding)
-            
-            # Análise estrutural avançada
-            if CONFIG_ARQUIVO['analise_estrutural_habilitada']:
-                separador_estrutural = self._analise_estrutural_separador(linhas)
-                if separador_estrutural:
-                    logger.info(f"✅ Separador detectado por análise estrutural: '{separador_estrutural}'")
-                    return separador_estrutural
-            
-            # Análise estatística melhorada
-            resultados = self._analisar_separadores_estatisticamente(linhas)
-            
-            # Escolher melhor separador com validação
-            if resultados:
-                separador_candidato = max(resultados, key=resultados.get)
-                score_maximo = resultados[separador_candidato]
+        with self.medidor.etapa(f"Detecção de Separador - {arquivo.name}"):
+            try:
+                # Validar integridade do arquivo antes da detecção
+                if CONFIG_ARQUIVO['validacao_integridade_habilitada']:
+                    if not self._validar_integridade_arquivo(arquivo):
+                        logger.warning("⚠️  Arquivo pode estar corrompido, procedendo com cautela")
                 
-                if score_maximo > 1.0:  # Score mínimo para confiança
-                    # Validar separador candidato
-                    if self._validar_separador(linhas, separador_candidato):
-                        logger.info(f"✅ Separador validado: '{separador_candidato}' (score: {score_maximo:.2f})")
-                        return separador_candidato
-                    else:
-                        logger.warning(f"Separador '{separador_candidato}' falhou na validação")
-            
-            # Fallback inteligente
-            if CONFIG_ARQUIVO['fallback_separador_inteligente']:
-                separador_fallback = self._fallback_separador_inteligente(arquivo, encoding)
-                if separador_fallback:
-                    return separador_fallback
-            
-            # Fallback final para padrão brasileiro
-            logger.warning("❌ Nenhum separador consistente encontrado, usando ';'")
-            return ';'
-            
-        except Exception as e:
-            logger.error(f"❌ Erro na detecção de separador: {e}")
-            if CONFIG_ARQUIVO['recuperacao_automatica_habilitada']:
-                return self._recuperacao_automatica_separador(arquivo, encoding)
-            return ';'
+                with open(arquivo, 'r', encoding=encoding) as f:
+                    # Ler amostra maior para análise mais robusta
+                    linhas = []
+                    for i in range(min(20, 2000)):  # Aumentado de 5 para 20 linhas
+                        linha = f.readline().strip()
+                        if linha and len(linha) > 10:  # Filtrar linhas muito curtas
+                            linhas.append(linha)
+                        if len(linhas) >= 15:  # Parar quando tiver linhas suficientes
+                            break
+                
+                if not linhas:
+                    logger.warning("Arquivo vazio ou sem linhas válidas")
+                    return self._fallback_separador_inteligente(arquivo, encoding)
+                
+                # Análise estrutural avançada
+                if CONFIG_ARQUIVO['analise_estrutural_habilitada']:
+                    separador_estrutural = self._analise_estrutural_separador(linhas)
+                    if separador_estrutural:
+                        logger.info(f"✅ Separador detectado por análise estrutural: '{separador_estrutural}'")
+                        return separador_estrutural
+                
+                # Análise estatística melhorada
+                resultados = self._analisar_separadores_estatisticamente(linhas)
+                
+                # Escolher melhor separador com validação
+                if resultados:
+                    separador_candidato = max(resultados, key=resultados.get)
+                    score_maximo = resultados[separador_candidato]
+                    
+                    if score_maximo > 1.0:  # Score mínimo para confiança
+                        # Validar separador candidato
+                        if self._validar_separador(linhas, separador_candidato):
+                            logger.info(f"✅ Separador validado: '{separador_candidato}' (score: {score_maximo:.2f})")
+                            return separador_candidato
+                        else:
+                            logger.warning(f"Separador '{separador_candidato}' falhou na validação")
+                
+                # Fallback inteligente
+                if CONFIG_ARQUIVO['fallback_separador_inteligente']:
+                    separador_fallback = self._fallback_separador_inteligente(arquivo, encoding)
+                    if separador_fallback:
+                        return separador_fallback
+                
+                # Fallback final para padrão brasileiro
+                logger.warning("❌ Nenhum separador consistente encontrado, usando ';'")
+                return ';'
+                
+            except Exception as e:
+                logger.error(f"❌ Erro na detecção de separador: {e}")
+                if CONFIG_ARQUIVO['recuperacao_automatica_habilitada']:
+                    return self._recuperacao_automatica_separador(arquivo, encoding)
+                return ';'
     
     def _validar_integridade_arquivo(self, arquivo: Path) -> bool:
         """
@@ -2261,40 +2241,42 @@ class ConversorParquetCaged:
         Returns:
             DataFrame com colunas padronizadas
         """
-        # Verificar cache se arquivo fornecido
-        cache_key = str(arquivo_origem) if arquivo_origem else None
-        if cache_key and cache_key in self._cache_mapeamentos:
-            mapeamento = self._cache_mapeamentos[cache_key]
-            logger.debug(f"Usando mapeamento em cache para {arquivo_origem.name}")
-        else:
-            # Criar mapeamento dinâmico baseado nos padrões CAGED
-            mapeamento = self._criar_mapeamento_dinamico(df.columns)
+        nome_arquivo = arquivo_origem.name if arquivo_origem else "DataFrame"
+        with self.medidor.etapa(f"Padronização de Colunas - {nome_arquivo}"):
+            # Verificar cache se arquivo fornecido
+            cache_key = str(arquivo_origem) if arquivo_origem else None
+            if cache_key and cache_key in self._cache_mapeamentos:
+                mapeamento = self._cache_mapeamentos[cache_key]
+                logger.debug(f"Usando mapeamento em cache para {arquivo_origem.name}")
+            else:
+                # Criar mapeamento dinâmico baseado nos padrões CAGED
+                mapeamento = self._criar_mapeamento_dinamico(df.columns)
+                
+                # Validar colunas usando sistema flexível
+                colunas_invalidas = obter_colunas_invalidas(df.columns)
+                if colunas_invalidas:
+                    logger.warning(f"Colunas inválidas encontradas: {len(colunas_invalidas)}")
+                
+                # Validar campos essenciais usando novo sistema
+                validacao = self._validar_campos_essenciais(df.columns)
+                if not validacao['valido']:
+                    logger.warning(f"Campos essenciais ausentes: {validacao['campos_ausentes']}")
+                    logger.info(f"Campos encontrados: {validacao['campos_encontrados']}")
+                
+                # Salvar no cache
+                if cache_key:
+                    self._cache_mapeamentos[cache_key] = mapeamento
             
-            # Validar colunas usando sistema flexível
-            colunas_invalidas = obter_colunas_invalidas(df.columns)
-            if colunas_invalidas:
-                logger.warning(f"Colunas inválidas encontradas: {len(colunas_invalidas)}")
-            
-            # Validar campos essenciais usando novo sistema
-            validacao = self._validar_campos_essenciais(df.columns)
-            if not validacao['valido']:
-                logger.warning(f"Campos essenciais ausentes: {validacao['campos_ausentes']}")
-                logger.info(f"Campos encontrados: {validacao['campos_encontrados']}")
-            
-            # Salvar no cache
-            if cache_key:
-                self._cache_mapeamentos[cache_key] = mapeamento
-        
-        # Aplicar padronização
-        try:
-            df_padronizado = df.rename(mapeamento)
-            logger.debug(f"Colunas padronizadas: {len(mapeamento)} mapeamentos aplicados")
-            return df_padronizado
-        except Exception as e:
-            logger.error(f"Erro na padronização de colunas: {e}")
-            # Fallback para padronização básica
-            mapeamento_basico = padronizar_colunas_dataframe(df.columns)
-            return df.rename(mapeamento_basico)
+            # Aplicar padronização
+            try:
+                df_padronizado = df.rename(mapeamento)
+                logger.debug(f"Colunas padronizadas: {len(mapeamento)} mapeamentos aplicados")
+                return df_padronizado
+            except Exception as e:
+                logger.error(f"Erro na padronização de colunas: {e}")
+                # Fallback para padronização básica
+                mapeamento_basico = padronizar_colunas_dataframe(df.columns)
+                return df.rename(mapeamento_basico)
     
     def _aplicar_tipos_dados(self, df: pl.DataFrame) -> pl.DataFrame:
         """
@@ -2306,21 +2288,22 @@ class ConversorParquetCaged:
         Returns:
             DataFrame com tipos corretos
         """
-        try:
-            conversoes = []
-            schema_aplicado = {}
-            
-            for coluna in df.columns:
-                # Obter amostra dos dados para análise
-                amostra = df.select(pl.col(coluna)).to_series().head(1000)
+        with self.medidor.etapa("Aplicação de Tipos de Dados"):
+            try:
+                conversoes = []
+                schema_aplicado = {}
                 
-                # Detectar tipo automaticamente com amostra
-                tipo_detectado = self._detectar_tipo_coluna(coluna, amostra)
-                schema_aplicado[coluna] = tipo_detectado
-                
-                if tipo_detectado == pl.Int64:
-                    # Conversão robusta para inteiros
-                    conversoes.append(
+                for coluna in df.columns:
+                    # Obter amostra dos dados para análise
+                    amostra = df.select(pl.col(coluna)).to_series().head(1000)
+                    
+                    # Detectar tipo automaticamente com amostra
+                    tipo_detectado = self._detectar_tipo_coluna(coluna, amostra)
+                    schema_aplicado[coluna] = tipo_detectado
+                    
+                    if tipo_detectado == pl.Int64:
+                        # Conversão robusta para inteiros
+                        conversoes.append(
                         pl.col(coluna)
                         .cast(pl.Utf8, strict=False)  # Primeiro para string
                         .str.replace_all(r'[^\d-]', '')  # Limpar caracteres
@@ -2331,9 +2314,9 @@ class ConversorParquetCaged:
                         .fill_null(0)
                         .alias(coluna)
                     )
-                elif tipo_detectado == pl.Float64:
-                    # Conversão para decimais
-                    conversoes.append(
+                    elif tipo_detectado == pl.Float64:
+                        # Conversão para decimais
+                        conversoes.append(
                         pl.col(coluna)
                         .cast(pl.Utf8, strict=False)
                         .str.replace_all(r'[^\d.,-]', '')  # Manter pontos e vírgulas
@@ -2343,9 +2326,9 @@ class ConversorParquetCaged:
                         .fill_null(0.0)
                         .alias(coluna)
                     )
-                elif tipo_detectado == pl.Categorical:
-                    # Conversão para categórico
-                    conversoes.append(
+                    elif tipo_detectado == pl.Categorical:
+                        # Conversão para categórico
+                        conversoes.append(
                         pl.col(coluna)
                         .cast(pl.Utf8, strict=False)
                         .fill_null("")
@@ -2353,9 +2336,9 @@ class ConversorParquetCaged:
                         .cast(pl.Categorical)
                         .alias(coluna)
                     )
-                elif tipo_detectado == pl.Boolean:
-                    # Conversão para booleano
-                    conversoes.append(
+                    elif tipo_detectado == pl.Boolean:
+                        # Conversão para booleano
+                        conversoes.append(
                         pl.col(coluna)
                         .cast(pl.Utf8, strict=False)
                         .str.to_lowercase()
@@ -2369,18 +2352,18 @@ class ConversorParquetCaged:
                         .fill_null(False)
                         .alias(coluna)
                     )
-                else:  # pl.Utf8 (padrão)
-                    # Conversão para string
-                    conversoes.append(
-                        pl.col(coluna)
-                        .cast(pl.Utf8, strict=False)
-                        .fill_null("")
-                        .str.strip()  # Remover espaços
-                        .alias(coluna)
-                    )
-            
-            if conversoes:
-                df = df.with_columns(conversoes)
+                    else:  # pl.Utf8 (padrão)
+                        # Conversão para string
+                        conversoes.append(
+                            pl.col(coluna)
+                            .cast(pl.Utf8, strict=False)
+                            .fill_null("")
+                            .str.strip()  # Remover espaços
+                            .alias(coluna)
+                        )
+                
+                if conversoes:
+                    df = df.with_columns(conversoes)
                 logger.debug(f"Tipos aplicados: {len(schema_aplicado)} colunas convertidas")
                 
                 # Log de tipos detectados para debug
@@ -2397,11 +2380,11 @@ class ConversorParquetCaged:
                     if col in schema_aplicado:
                         logger.debug(f"Coluna {col}: {schema_aplicado[col]}")
             
-            return df
-            
-        except Exception as e:
-            logger.error(f"Erro ao aplicar tipos de dados: {e}")
-            return df
+                return df
+                
+            except Exception as e:
+                logger.error(f"Erro ao aplicar tipos de dados: {e}")
+                return df
     
     def validar_integridade_dados(self, df: pl.DataFrame) -> Dict[str, Any]:
         """
@@ -2413,86 +2396,87 @@ class ConversorParquetCaged:
         Returns:
             Dict com resultados detalhados da validação
         """
-        resultado_validacao = {
-            'valido_geral': True,
-            'validacoes': {},
-            'alertas': [],
-            'erros': [],
-            'checksum': None,
-            'recuperacao_aplicada': False
-        }
-        
-        try:
-            # Calcular checksum dos dados para integridade
-            resultado_validacao['checksum'] = self._calcular_checksum_dataframe(df)
+        with self.medidor.etapa("Validação de Integridade dos Dados"):
+            resultado_validacao = {
+                'valido_geral': True,
+                'validacoes': {},
+                'alertas': [],
+                'erros': [],
+                'checksum': None,
+                'recuperacao_aplicada': False
+            }
             
-            # 1. Validação de qualidade avançada
-            resultado_qualidade = self._validar_qualidade_avancada(df)
-            resultado_validacao['validacoes']['qualidade_avancada'] = resultado_qualidade
-            
-            if not resultado_qualidade['valido']:
+            try:
+                # Calcular checksum dos dados para integridade
+                resultado_validacao['checksum'] = self._calcular_checksum_dataframe(df)
+                
+                # 1. Validação de qualidade avançada
+                resultado_qualidade = self._validar_qualidade_avancada(df)
+                resultado_validacao['validacoes']['qualidade_avancada'] = resultado_qualidade
+                
+                if not resultado_qualidade['valido']:
+                    resultado_validacao['valido_geral'] = False
+                    resultado_validacao['alertas'].append(resultado_qualidade['mensagem'])
+                
+                # 2. Validação de consistência estrutural
+                resultado_estrutural = self._validar_consistencia_estrutural(df)
+                resultado_validacao['validacoes']['consistencia_estrutural'] = resultado_estrutural
+                
+                if not resultado_estrutural['valido']:
+                    resultado_validacao['alertas'].append(resultado_estrutural['mensagem'])
+                
+                # 3. Validação de integridade referencial
+                resultado_referencial = self._validar_integridade_referencial(df)
+                resultado_validacao['validacoes']['integridade_referencial'] = resultado_referencial
+                
+                if not resultado_referencial['valido']:
+                    resultado_validacao['alertas'].append(resultado_referencial['mensagem'])
+                
+                # 4. Validação de saldo de movimentação
+                resultado_saldo = self._validar_saldo_movimentacao(df)
+                resultado_validacao['validacoes']['saldo_movimentacao'] = resultado_saldo
+                
+                if not resultado_saldo['valido']:
+                    resultado_validacao['valido_geral'] = False
+                    resultado_validacao['alertas'].append(resultado_saldo['mensagem'])
+                
+                # 5. Validação de consistência temporal
+                resultado_temporal = self._validar_consistencia_temporal(df)
+                resultado_validacao['validacoes']['consistencia_temporal'] = resultado_temporal
+                
+                if not resultado_temporal['valido']:
+                    resultado_validacao['alertas'].append(resultado_temporal['mensagem'])
+                
+                # 6. Validação de domínios válidos
+                resultado_dominios = self._validar_dominios_validos(df)
+                resultado_validacao['validacoes']['dominios_validos'] = resultado_dominios
+                
+                if not resultado_dominios['valido']:
+                    resultado_validacao['alertas'].append(resultado_dominios['mensagem'])
+                
+                # 7. Validação de completude de dados
+                resultado_completude = self._validar_completude_dados(df)
+                resultado_validacao['validacoes']['completude_dados'] = resultado_completude
+                
+                if not resultado_completude['valido']:
+                    resultado_validacao['alertas'].append(resultado_completude['mensagem'])
+                
+                # Log dos resultados
+                if resultado_validacao['valido_geral']:
+                    logger.info("✅ Validação de integridade: APROVADA")
+                else:
+                    logger.warning(f"⚠️  Validação de integridade: {len(resultado_validacao['alertas'])} alertas")
+                    for alerta in resultado_validacao['alertas']:
+                        logger.warning(f"   - {alerta}")
+                
+                return resultado_validacao
+                
+            except Exception as e:
+                erro_msg = f"Erro na validação de integridade: {e}"
+                logger.error(erro_msg)
                 resultado_validacao['valido_geral'] = False
-                resultado_validacao['alertas'].append(resultado_qualidade['mensagem'])
-            
-            # 2. Validação de consistência estrutural
-            resultado_estrutural = self._validar_consistencia_estrutural(df)
-            resultado_validacao['validacoes']['consistencia_estrutural'] = resultado_estrutural
-            
-            if not resultado_estrutural['valido']:
-                resultado_validacao['alertas'].append(resultado_estrutural['mensagem'])
-            
-            # 3. Validação de integridade referencial
-            resultado_referencial = self._validar_integridade_referencial(df)
-            resultado_validacao['validacoes']['integridade_referencial'] = resultado_referencial
-            
-            if not resultado_referencial['valido']:
-                resultado_validacao['alertas'].append(resultado_referencial['mensagem'])
-            
-            # 4. Validação de saldo de movimentação
-            resultado_saldo = self._validar_saldo_movimentacao(df)
-            resultado_validacao['validacoes']['saldo_movimentacao'] = resultado_saldo
-            
-            if not resultado_saldo['valido']:
-                resultado_validacao['valido_geral'] = False
-                resultado_validacao['alertas'].append(resultado_saldo['mensagem'])
-            
-            # 5. Validação de consistência temporal
-            resultado_temporal = self._validar_consistencia_temporal(df)
-            resultado_validacao['validacoes']['consistencia_temporal'] = resultado_temporal
-            
-            if not resultado_temporal['valido']:
-                resultado_validacao['alertas'].append(resultado_temporal['mensagem'])
-            
-            # 6. Validação de domínios válidos
-            resultado_dominios = self._validar_dominios_validos(df)
-            resultado_validacao['validacoes']['dominios_validos'] = resultado_dominios
-            
-            if not resultado_dominios['valido']:
-                resultado_validacao['alertas'].append(resultado_dominios['mensagem'])
-            
-            # 7. Validação de completude de dados
-            resultado_completude = self._validar_completude_dados(df)
-            resultado_validacao['validacoes']['completude_dados'] = resultado_completude
-            
-            if not resultado_completude['valido']:
-                resultado_validacao['alertas'].append(resultado_completude['mensagem'])
-            
-            # Log dos resultados
-            if resultado_validacao['valido_geral']:
-                logger.info("✅ Validação de integridade: APROVADA")
-            else:
-                logger.warning(f"⚠️  Validação de integridade: {len(resultado_validacao['alertas'])} alertas")
-                for alerta in resultado_validacao['alertas']:
-                    logger.warning(f"   - {alerta}")
-            
-            return resultado_validacao
-            
-        except Exception as e:
-            erro_msg = f"Erro na validação de integridade: {e}"
-            logger.error(erro_msg)
-            resultado_validacao['valido_geral'] = False
-            resultado_validacao['erros'].append(erro_msg)
-            return resultado_validacao
+                resultado_validacao['erros'].append(erro_msg)
+                return resultado_validacao
     
     def _validar_saldo_movimentacao(self, df: pl.DataFrame) -> Dict[str, Any]:
         """Valida se Admitidos - Desligados = Saldo"""
@@ -3003,7 +2987,7 @@ class ConversorParquetCaged:
             logger.debug(f"Erro na validação de dados recuperados: {e}")
             return False
      
-     def converter_mensal(self, 
+    def converter_mensal(self, 
                         ano: int, 
                         mes: int,
                         campos_selecionados: Optional[List[str]] = None,
