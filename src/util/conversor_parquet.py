@@ -34,6 +34,13 @@ from src.util.utilitarios import (
     criar_mapeamento_caged_flexivel,
     obter_colunas_invalidas
 )
+from src.util.filtro_caged import (
+    FiltroCNAE,
+    FiltroPeriodo,
+    FiltroMovimentacao,
+    FiltroGeografico,
+    GerenciadorFiltros
+)
 
 # ============================================================================
 # CONFIGURAÇÕES GLOBAIS
@@ -180,6 +187,39 @@ VALIDACOES_INTEGRIDADE = {
     }
 }
 
+# ============================================================================
+# CONFIGURAÇÕES DE FILTROS
+# ============================================================================
+
+# Configurações de filtros CAGED
+CONFIG_FILTROS = {
+    'habilitar_filtros': False,  # Habilitar sistema de filtros
+    'aplicar_filtros_paralelo': True,  # Aplicar filtros em paralelo
+    'log_estatisticas_filtros': True,  # Log detalhado dos filtros
+    'validar_filtros_inicializacao': True,  # Validar filtros na inicialização
+    
+    # Configurações específicas de filtros
+    'filtro_cnae': {
+        'arquivo_padrao': 'db/cnae_classe_emprego_verde.csv',
+        'situacao_padrao': 1,
+        'coluna_cnae_padrao': 'CNAESUBCLASSE'
+    },
+    'filtro_periodo': {
+        'coluna_competencia_padrao': 'COMPETENCIA',
+        'formato_competencia': 'YYYYMM'
+    },
+    'filtro_movimentacao': {
+        'coluna_tipo_padrao': 'TIPOMOVIMENTACAO',
+        'coluna_saldo_padrao': 'SALDOMOVIMENTACAO'
+    },
+    'filtro_geografico': {
+        'coluna_uf_padrao': 'UF',
+        'coluna_regiao_padrao': 'REGIAO',
+        'coluna_municipio_padrao': 'MUNICIPIO',
+        'coluna_cep_padrao': 'CEP'
+    }
+}
+
 # Configurações de logging estruturado
 logger.remove()  # Remove handler padrão
 logger.add(
@@ -214,7 +254,9 @@ class ConversorParquetCaged:
                  diretorio_destino: str = "parquet",
                  max_workers: Optional[int] = None,
                  chunk_size: Optional[int] = None,
-                 habilitar_paralelismo: bool = True):
+                 habilitar_paralelismo: bool = True,
+                 habilitar_filtros: bool = False,
+                 configuracao_filtros: Optional[Dict[str, Any]] = None):
         """
         Inicializa o conversor com configurações otimizadas
         
@@ -224,6 +266,8 @@ class ConversorParquetCaged:
             max_workers: Número máximo de workers (None = automático)
             chunk_size: Tamanho do chunk (None = automático)
             habilitar_paralelismo: Se deve usar processamento paralelo
+            habilitar_filtros: Se deve habilitar sistema de filtros
+            configuracao_filtros: Configurações específicas dos filtros
         """
         # Configuração de diretórios
         self.diretorio_origem = Path(diretorio_origem)
@@ -235,13 +279,24 @@ class ConversorParquetCaged:
         self.max_workers = max_workers or CONFIG_PARALELISMO['max_workers']
         self.chunk_size = chunk_size or CONFIG_PARALELISMO['chunk_size']
         
+        # Configuração de filtros
+        self.habilitar_filtros = habilitar_filtros
+        self.configuracao_filtros = configuracao_filtros or {}
+        self.gerenciador_filtros = None
+        
+        # Inicializar sistema de filtros se habilitado
+        if self.habilitar_filtros:
+            self._inicializar_sistema_filtros()
+        
         # Contadores e estatísticas
         self.contador_entidades = 0
         self.estatisticas = {
             'arquivos_processados': 0,
             'arquivos_com_erro': 0,
             'total_registros': 0,
-            'tempo_total': 0
+            'tempo_total': 0,
+            'registros_filtrados': 0,
+            'filtros_aplicados': 0
         }
         
         # Medidor de tempo
@@ -256,6 +311,7 @@ class ConversorParquetCaged:
         logger.info(f"Destino: {self.diretorio_destino}")
         logger.info(f"Paralelismo: {self.habilitar_paralelismo} (workers: {self.max_workers})")
         logger.info(f"Chunk size: {self.chunk_size}")
+        logger.info(f"Filtros: {self.habilitar_filtros}")
     
     def _calcular_chunk_size_dinamico(self, tamanho_arquivo_bytes: int, 
                                      numero_colunas: int = 50) -> int:
@@ -609,6 +665,252 @@ class ConversorParquetCaged:
             'percentual_encontrado': len(campos_encontrados) / len(CAMPOS_ESSENCIAIS_CAGED) * 100
         }
     
+    def _inicializar_sistema_filtros(self) -> None:
+        """
+        Inicializa o sistema de filtros baseado na configuração fornecida
+        """
+        try:
+            self.gerenciador_filtros = GerenciadorFiltros()
+            config_filtros = {**CONFIG_FILTROS, **self.configuracao_filtros}
+            
+            logger.info("Inicializando sistema de filtros...")
+            
+            # Configurar filtro CNAE se especificado
+            if 'filtro_cnae' in self.configuracao_filtros:
+                config_cnae = self.configuracao_filtros['filtro_cnae']
+                if 'arquivo' in config_cnae:
+                    nome_filtro = config_cnae.get('nome', 'CNAE Personalizado')
+                    situacao = config_cnae.get('situacao', 1)
+                    
+                    self.gerenciador_filtros.adicionar_filtro_cnae(
+                        caminho_arquivo=config_cnae['arquivo'],
+                        nome_filtro=nome_filtro,
+                        situacao=situacao
+                    )
+                    logger.info(f"Filtro CNAE configurado: {nome_filtro}")
+            
+            # Configurar filtro de período se especificado
+            if 'filtro_periodo' in self.configuracao_filtros:
+                config_periodo = self.configuracao_filtros['filtro_periodo']
+                self.gerenciador_filtros.adicionar_filtro_periodo(**config_periodo)
+                logger.info("Filtro de período configurado")
+            
+            # Configurar filtro de movimentação se especificado
+            if 'filtro_movimentacao' in self.configuracao_filtros:
+                config_movimentacao = self.configuracao_filtros['filtro_movimentacao']
+                self.gerenciador_filtros.adicionar_filtro_movimentacao(**config_movimentacao)
+                logger.info("Filtro de movimentação configurado")
+            
+            # Configurar filtro geográfico se especificado
+            if 'filtro_geografico' in self.configuracao_filtros:
+                config_geografico = self.configuracao_filtros['filtro_geografico']
+                self.gerenciador_filtros.adicionar_filtro_geografico(**config_geografico)
+                logger.info("Filtro geográfico configurado")
+            
+            # Validar filtros se configurado
+            if config_filtros.get('validar_filtros_inicializacao', True):
+                resumo = self.gerenciador_filtros.obter_resumo_filtros()
+                logger.info(f"Sistema de filtros inicializado: {resumo['total_filtros']} filtros ativos")
+                
+                if config_filtros.get('log_estatisticas_filtros', True):
+                    for tipo, quantidade in resumo['tipos_filtros'].items():
+                        logger.info(f"  - {tipo}: {quantidade} filtro(s)")
+            
+        except Exception as e:
+            logger.error(f"Erro ao inicializar sistema de filtros: {e}")
+            self.gerenciador_filtros = None
+            self.habilitar_filtros = False
+    
+    def _aplicar_filtros_dataframe(self, df: pl.DataFrame) -> pl.DataFrame:
+        """
+        Aplica os filtros configurados ao DataFrame
+        
+        Args:
+            df: DataFrame a ser filtrado
+            
+        Returns:
+            DataFrame filtrado
+        """
+        if not self.habilitar_filtros or not self.gerenciador_filtros:
+            return df
+        
+        try:
+            total_antes = df.height
+            
+            # Aplicar filtros
+            df_filtrado = self.gerenciador_filtros.aplicar_filtros(df)
+            
+            total_depois = df_filtrado.height
+            registros_removidos = total_antes - total_depois
+            
+            # Atualizar estatísticas
+            self.estatisticas['registros_filtrados'] += registros_removidos
+            self.estatisticas['filtros_aplicados'] += 1
+            
+            if registros_removidos > 0:
+                percentual_removido = (registros_removidos / total_antes) * 100
+                logger.info(f"Filtros aplicados: {registros_removidos:,} registros removidos ({percentual_removido:.2f}%)")
+            
+            return df_filtrado
+            
+        except Exception as e:
+            logger.error(f"Erro ao aplicar filtros: {e}")
+            return df
+    
+    def configurar_filtro_cnae(self, arquivo_cnae: str, nome_filtro: str = "CNAE", situacao: int = 1) -> 'ConversorParquetCaged':
+        """
+        Configura um filtro CNAE (method chaining)
+        
+        Args:
+            arquivo_cnae: Caminho para o arquivo CSV com classificação CNAE
+            nome_filtro: Nome descritivo do filtro
+            situacao: Valor da coluna SITUACAO para filtrar
+            
+        Returns:
+            Self para permitir method chaining
+        """
+        if not self.habilitar_filtros:
+            self.habilitar_filtros = True
+            self._inicializar_sistema_filtros()
+        
+        if self.gerenciador_filtros:
+            self.gerenciador_filtros.adicionar_filtro_cnae(arquivo_cnae, nome_filtro, situacao)
+        
+        return self
+    
+    def configurar_filtro_periodo(self, **kwargs) -> 'ConversorParquetCaged':
+        """
+        Configura um filtro de período (method chaining)
+        
+        Args:
+            **kwargs: Argumentos para FiltroPeriodo
+            
+        Returns:
+            Self para permitir method chaining
+        """
+        if not self.habilitar_filtros:
+            self.habilitar_filtros = True
+            self._inicializar_sistema_filtros()
+        
+        if self.gerenciador_filtros:
+            self.gerenciador_filtros.adicionar_filtro_periodo(**kwargs)
+        
+        return self
+    
+    def configurar_filtro_movimentacao(self, **kwargs) -> 'ConversorParquetCaged':
+        """
+        Configura um filtro de movimentação (method chaining)
+        
+        Args:
+            **kwargs: Argumentos para FiltroMovimentacao
+            
+        Returns:
+            Self para permitir method chaining
+        """
+        if not self.habilitar_filtros:
+            self.habilitar_filtros = True
+            self._inicializar_sistema_filtros()
+        
+        if self.gerenciador_filtros:
+            self.gerenciador_filtros.adicionar_filtro_movimentacao(**kwargs)
+        
+        return self
+    
+    def configurar_filtro_geografico(self, **kwargs) -> 'ConversorParquetCaged':
+        """
+        Configura um filtro geográfico (method chaining)
+        
+        Args:
+            **kwargs: Argumentos para FiltroGeografico
+            
+        Returns:
+            Self para permitir method chaining
+        """
+        if not self.habilitar_filtros:
+            self.habilitar_filtros = True
+            self._inicializar_sistema_filtros()
+        
+        if self.gerenciador_filtros:
+            self.gerenciador_filtros.adicionar_filtro_geografico(**kwargs)
+        
+        return self
+    
+    def obter_resumo_filtros(self) -> Dict[str, Any]:
+        """
+        Obtém um resumo dos filtros configurados
+        
+        Returns:
+            Dicionário com resumo dos filtros
+        """
+        if not self.habilitar_filtros or not self.gerenciador_filtros:
+            return {'filtros_habilitados': False, 'total_filtros': 0}
+        
+        resumo = self.gerenciador_filtros.obter_resumo_filtros()
+        resumo['filtros_habilitados'] = True
+        resumo['registros_filtrados'] = self.estatisticas.get('registros_filtrados', 0)
+        resumo['filtros_aplicados'] = self.estatisticas.get('filtros_aplicados', 0)
+        
+        return resumo
+    
+    def _configurar_filtros_dinamicos(self,
+                                     filtros_cnae: Optional[List[str]] = None,
+                                     filtros_periodo: Optional[Dict[str, Any]] = None,
+                                     filtros_movimentacao: Optional[List[str]] = None,
+                                     filtros_geograficos: Optional[Dict[str, Any]] = None) -> None:
+        """
+        Configura filtros dinamicamente em tempo de execução
+        
+        Args:
+            filtros_cnae: Lista de códigos CNAE para filtrar
+            filtros_periodo: Configurações de filtro por período
+            filtros_movimentacao: Tipos de movimentação para filtrar
+            filtros_geograficos: Configurações de filtro geográfico
+        """
+        # Habilitar sistema de filtros
+        self.habilitar_filtros = True
+        
+        # Inicializar gerenciador se não existir
+        if not self.gerenciador_filtros:
+            self._inicializar_sistema_filtros()
+        
+        # Configurar filtro CNAE
+        if filtros_cnae:
+            self.configurar_filtro_cnae(codigos_cnae=filtros_cnae)
+        
+        # Configurar filtro de período
+        if filtros_periodo:
+            anos = filtros_periodo.get('anos')
+            meses = filtros_periodo.get('meses')
+            data_inicio = filtros_periodo.get('data_inicio')
+            data_fim = filtros_periodo.get('data_fim')
+            
+            self.configurar_filtro_periodo(
+                anos=anos,
+                meses=meses,
+                data_inicio=data_inicio,
+                data_fim=data_fim
+            )
+        
+        # Configurar filtro de movimentação
+        if filtros_movimentacao:
+            self.configurar_filtro_movimentacao(tipos_movimentacao=filtros_movimentacao)
+        
+        # Configurar filtro geográfico
+        if filtros_geograficos:
+            ufs = filtros_geograficos.get('ufs')
+            regioes = filtros_geograficos.get('regioes')
+            municipios = filtros_geograficos.get('municipios')
+            ceps = filtros_geograficos.get('ceps')
+            
+            self.configurar_filtro_geografico(
+                ufs=ufs,
+                regioes=regioes,
+                municipios=municipios,
+                ceps=ceps
+            )
+        
+        logger.info(f"Sistema de filtros configurado dinamicamente com {len(self.gerenciador_filtros.filtros)} filtros ativos")
+    
     def _detectar_tipo_coluna(self, nome_coluna: str, amostra_dados: Optional[pl.Series] = None) -> pl.DataType:
         """
         Detecta automaticamente o tipo de dados de uma coluna baseado no nome e amostra
@@ -864,6 +1166,18 @@ class ConversorParquetCaged:
                 pl.lit(mes).alias("MES")
             ])
             
+            # Aplicar filtros se habilitados
+            if self.habilitar_filtros and self.gerenciador_filtros:
+                registros_antes = df.shape[0]
+                df = self._aplicar_filtros_dataframe(df)
+                registros_depois = df.shape[0]
+                registros_filtrados = registros_antes - registros_depois
+                
+                self.estatisticas['registros_filtrados'] += registros_filtrados
+                
+                if registros_filtrados > 0:
+                    logger.info(f"Filtros aplicados: {registros_filtrados:,} registros removidos ({registros_antes:,} → {registros_depois:,})")
+            
             # Validar integridade dos dados
             if self.validar_integridade_dados(df):
                 logger.info("✅ Dados validados com sucesso")
@@ -1040,6 +1354,15 @@ class ConversorParquetCaged:
                 pl.lit(ano).alias("ANO"),
                 pl.lit(mes).alias("MES")
             ])
+            
+            # Aplicar filtros se habilitados (para chunks)
+            if self.habilitar_filtros and self.gerenciador_filtros:
+                registros_antes = df_processado.shape[0]
+                df_processado = self._aplicar_filtros_dataframe(df_processado)
+                registros_depois = df_processado.shape[0]
+                registros_filtrados = registros_antes - registros_depois
+                
+                self.estatisticas['registros_filtrados'] += registros_filtrados
             
             return df_processado
             
@@ -1663,7 +1986,11 @@ class ConversorParquetCaged:
                         ano: int, 
                         mes: int,
                         campos_selecionados: Optional[List[str]] = None,
-                        usar_paralelismo: Optional[bool] = None) -> Tuple[bool, List, List, List]:
+                        usar_paralelismo: Optional[bool] = None,
+                        filtros_cnae: Optional[List[str]] = None,
+                        filtros_periodo: Optional[Dict[str, Any]] = None,
+                        filtros_movimentacao: Optional[List[str]] = None,
+                        filtros_geograficos: Optional[Dict[str, Any]] = None) -> Tuple[bool, List, List, List]:
         """
         Converte dados de um mês específico para Parquet com processamento otimizado
         
@@ -1672,11 +1999,25 @@ class ConversorParquetCaged:
             mes: Mês dos dados
             campos_selecionados: Campos específicos a processar
             usar_paralelismo: Forçar uso/não uso de paralelismo
+            filtros_cnae: Lista de códigos CNAE para filtrar
+            filtros_periodo: Configurações de filtro por período
+            filtros_movimentacao: Tipos de movimentação para filtrar
+            filtros_geograficos: Configurações de filtro geográfico
             
         Returns:
             Tuple[bool, List[Movimentacao], List[SaldoMensal], List[Indicador]]: Resultado da conversão
         """
         with self.medidor.etapa(f"Conversão Mensal {ano}/{mes:02d}"):
+            # Configurar filtros se fornecidos
+            if any([filtros_cnae, filtros_periodo, filtros_movimentacao, filtros_geograficos]):
+                self._configurar_filtros_dinamicos(
+                    filtros_cnae=filtros_cnae,
+                    filtros_periodo=filtros_periodo,
+                    filtros_movimentacao=filtros_movimentacao,
+                    filtros_geograficos=filtros_geograficos
+                )
+                logger.info(f"Filtros configurados: {self.obter_resumo_filtros()}")
+            
             # Configurar paralelismo
             usar_paralelo = usar_paralelismo if usar_paralelismo is not None else self.habilitar_paralelismo
             
