@@ -1,6 +1,6 @@
-# 🎯 Processador de Dados CAGED
+# 🎯 Sistema CAGED
 
-Sistema automatizado para download, processamento e consolidação de dados mensais do **Cadastro Geral de Empregados e Desempregados (CAGED)**.
+Sistema automatizado para download, processamento e consolidação de dados mensais do **Cadastro Geral de Empregados e Desempregados (CAGED)** com arquitetura refatorada e CLI unificada.
 
 ## 🚀 Características
 
@@ -8,7 +8,10 @@ Sistema automatizado para download, processamento e consolidação de dados mens
 - **🔄 Pipeline Automatizado**: Download, descompactação, conversão e consolidação
 - **⚡ Processamento Paralelo**: Otimizado para grandes volumes de dados
 - **📦 Formato Parquet**: Arquivos compactos e otimizados para análise
-- **🎛️ Interface CLI**: Comandos simples e intuitivos
+- **🎛️ CLI Unificada**: Interface de linha de comando refatorada e intuitiva
+- **🏗️ Arquitetura Modular**: Estrutura organizada em módulos especializados
+- **⚙️ Sistema de Configuração**: Configuração centralizada e flexível
+- **🔧 Pipeline Avançado**: Sistema de processamento com estágios configuráveis
 
 ## 📋 Requisitos
 
@@ -33,126 +36,119 @@ venv\Scripts\activate     # Windows
 pip install -r requirements.txt
 ```
 
-## 🎯 Comandos Disponíveis
+## 🎯 CLI Unificada
 
-### 📥 Download de Dados
+### 🔄 Comando Principal de Processamento
 ```bash
-# Apenas baixar dados de janeiro/2024
-python main.py baixar --ano 2024 --mes 1
+# Processamento completo (download + extração + conversão)
+python main.py processar --ano 2024 --mes 1
 
-# Baixar primeiro semestre
-python main.py baixar --ano 2024 --mes-inicio 1 --mes-fim 6
+# Processamento anual completo
+python main.py processar --ano 2024 --anual
 
-# Baixar todos os meses de um ano específico
-python main.py baixar --ano 2024 --todos-meses
+# Processamento por faixa de datas
+python main.py processar --ano-inicio 2024 --mes-inicio 1 --ano-fim 2024 --mes-fim 6
 
-# Baixar todos os anos disponíveis no FTP
-python main.py baixar --todos-anos
+# Apenas download
+python main.py processar --ano 2024 --mes 1 --apenas-download
+
+# Apenas extração
+python main.py processar --ano 2024 --mes 1 --apenas-extracao
+
+# Apenas conversão
+python main.py processar --ano 2024 --mes 1 --apenas-conversao
+
+# Pular etapas específicas
+python main.py processar --ano 2024 --mes 1 --pular-download --pular-extracao
 ```
 
-> **📝 Nota**: Os arquivos CAGED contêm dados de todas as UFs em um único arquivo por competência. A filtragem por UF deve ser feita após o download e descompactação dos dados.
-
-### 📦 Descompactação
+### ⚙️ Configuração do Sistema
 ```bash
-# Apenas descompactar arquivos já baixados
-python main.py apenas-descompactar --ano 2024 --mes 1
+# Criar arquivo de configuração padrão
+python main.py config-create
 
-# Descompactar todos os arquivos de um ano
-python main.py apenas-descompactar --ano 2024 --todos
+# Mostrar configuração atual
+python main.py config-show
 
-# Baixar e descompactar
-python main.py descompactar --ano 2024 --mes 1
+# Usar arquivo de configuração específico
+python main.py --config config/custom.yaml processar --ano 2024 --mes 1
+
+# Usar profile de configuração
+python main.py --profile producao processar --ano 2024 --mes 1
 ```
 
-### 🔄 Conversão
+### 🔧 Opções Avançadas
 ```bash
-# Apenas converter arquivos já baixados
-python main.py apenas-converter --ano 2024 --mes 1
+# Modo debug
+python main.py --debug processar --ano 2024 --mes 1
 
-# Converter ano completo
-python main.py apenas-converter --ano 2024 --consolidacao-anual
+# Processamento com validação rigorosa
+python main.py processar --ano 2024 --mes 1 --validacao-rigorosa
 
-# Baixar e converter
-python main.py converter --ano 2024 --mes 1
+# Forçar reprocessamento
+python main.py processar --ano 2024 --mes 1 --forcar
+
+# Processamento paralelo customizado
+python main.py processar --ano 2024 --mes 1 --workers 8
 ```
 
-### 🚀 Processamento Completo
-```bash
-# Processamento completo: baixar, descompactar e converter
-python main.py completo --ano 2024 --mes 1
+## 🏗️ Arquitetura
 
-# Processamento completo do ano
-python main.py completo --ano 2024 --consolidacao-anual
-```
+### 🎯 Benefícios da Arquitetura
 
-### 📊 Status do Projeto
-```bash
-# Verificar arquivos processados
-python main.py status
-```
+- **🔧 Modularidade**: Separação clara de responsabilidades
+- **⚙️ Configuração Centralizada**: Sistema de configuração YAML flexível
+- **🔄 Pipeline Avançado**: Processamento em estágios configuráveis
+- **🚨 Tratamento de Exceções**: Hierarquia de exceções customizadas
+- **📊 Monitoramento**: Sistema de logging e métricas integrado
+- **🎛️ CLI Unificada**: Interface simplificada e intuitiva
 
-## 🚀 Comandos Otimizados - Fase 5.1
+### 📦 Componentes Principais
 
-### ⚡ Conversão Otimizada
-```bash
-# Conversão mensal com cache e paralelismo
-python main.py converter-otimizado --ano 2024 --mes 1
-
-# Conversão sem cache
-python main.py converter-otimizado --ano 2024 --mes 1 --sem-cache
-
-# Conversão sequencial (sem paralelismo)
-python main.py converter-otimizado --ano 2024 --mes 1 --sem-paralelismo
-
-# Conversão com campos específicos
-python main.py converter-otimizado --ano 2024 --mes 1 --campos ADMITIDOS DESLIGADOS SALDO
-```
-
-### 🚀 Consolidação Otimizada
-```bash
-# Consolidação anual com cache e paralelismo
-python main.py consolidar-otimizado --ano 2024
-
-# Consolidação sem cache
-python main.py consolidar-otimizado --ano 2024 --sem-cache
-
-# Consolidação sequencial (sem paralelismo)
-python main.py consolidar-otimizado --ano 2024 --sem-paralelismo
-```
-
-### 📊 Gerenciamento de Cache
-```bash
-# Exibir estatísticas detalhadas do cache
-python main.py estatisticas-cache
-
-# Limpar arquivos de cache expirados
-python main.py limpar-cache
-```
-
-### 🎯 Benefícios da Fase 5.1
-
-- **⚡ Performance**: Processamento paralelo otimizado
-- **💾 Cache Inteligente**: Reutilização de dados processados
-- **📊 Estatísticas**: Monitoramento detalhado de performance
-- **🧹 Limpeza Automática**: Gerenciamento automático de cache
-- **🎛️ Controle Granular**: Opções para desabilitar cache/paralelismo
+- **Core**: Configuração, exceções e pipeline principal
+- **Services**: Serviços de FTP, extração e conversão
+- **Entities**: Modelos de dados do CAGED
+- **Utils**: Utilitários, validadores e logging
+- **CLI**: Interface de linha de comando unificada
 
 ## 📁 Estrutura do Projeto
 
 ```
 caged/
-├── main.py                    # Script principal
+├── main.py                    # Ponto de entrada principal
 ├── requirements.txt           # Dependências
 ├── README.md                 # Este arquivo
-├── db/                       # Classificações auxiliares
+├── config/                   # Arquivos de configuração
+├── cache/                    # Cache do sistema
 ├── files-zip/                # Arquivos baixados (7z)
 ├── files-unzip/              # Arquivos descompactados
 ├── parquet/                  # Dados processados (Parquet)
 ├── logs/                     # Logs de execução
-└── src/util/                 # Módulos do sistema
-    ├── gerenciador_ftp.py    # Download FTP
-    ├── conversor_parquet.py  # Conversão de dados
-    └── ...
+└── src/                      # Código fonte
+    ├── cli/                  # Interface de linha de comando
+    │   ├── __init__.py
+    │   └── commands.py       # Comandos CLI unificados
+    ├── core/                 # Componentes centrais
+    │   ├── __init__.py
+    │   ├── config.py         # Sistema de configuração
+    │   ├── exceptions.py     # Exceções customizadas
+    │   └── pipeline.py       # Pipeline de processamento
+    ├── entities/             # Entidades de dados
+    │   ├── __init__.py
+    │   ├── movimentacao.py
+    │   ├── saldo_mensal.py
+    │   └── ...
+    ├── services/             # Serviços de negócio
+    │   ├── __init__.py
+    │   ├── ftp_service.py    # Serviço de FTP
+    │   ├── extract_service.py # Serviço de extração
+    │   └── convert_service.py # Serviço de conversão
+    └── utils/                # Utilitários
+        ├── __init__.py
+        ├── logger.py         # Sistema de logging
+        ├── validators.py     # Validadores
+        ├── utilitarios.py    # Utilitários gerais
+        └── filtro_caged.py   # Filtros CAGED
 ```
 
 ## 📊 Dados CAGED
@@ -195,12 +191,16 @@ O sistema gera automaticamente diversos indicadores para análise do mercado de 
 
 ## 🎯 Status do Desenvolvimento
 
-- [x] ✅ Estrutura inicial do projeto
-- [ ] 🔄 Módulo de download FTP
-- [ ] 🔄 Conversor Parquet
-- [ ] 🔄 Pipeline de processamento
-- [ ] 🔄 Interface de comandos
-- [ ] 🔄 Testes e validação
+- [x] ✅ Refatoração da estrutura de arquivos
+- [x] ✅ Sistema de configuração centralizado
+- [x] ✅ Hierarquia de exceções customizadas
+- [x] ✅ Pipeline de processamento avançado
+- [x] ✅ CLI unificada e intuitiva
+- [x] ✅ Migração de módulos para nova estrutura
+- [x] ✅ Sistema de logging refatorado
+- [ ] 🔄 Testes automatizados
+- [ ] 🔄 Documentação técnica
+- [ ] 🔄 Interface web (planejada)
 
 ## 📞 Suporte
 

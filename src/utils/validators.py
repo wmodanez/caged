@@ -17,7 +17,7 @@ from datetime import datetime
 from typing import Tuple, Optional, List
 from pathlib import Path
 
-from .logger_config import setup_logger
+from .logger import setup_logger
 
 # Configurar logger
 logger = setup_logger("validators", "INFO")

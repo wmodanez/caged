@@ -20,11 +20,11 @@ import logging
 logger = logging.getLogger("caged")
 
 # Importação das entidades
-from src.Entity.movimentacao import Movimentacao
-from src.Entity.saldo_mensal import SaldoMensal
-from src.Entity.exclusao import Exclusao
-from src.Entity.movimentacao_fora_prazo import MovimentacaoForaPrazo
-from src.Entity.indicador import Indicador
+from src.entities.movimentacao import Movimentacao
+from src.entities.saldo_mensal import SaldoMensal
+from src.entities.exclusao import Exclusao
+from src.entities.movimentacao_fora_prazo import MovimentacaoForaPrazo
+from src.entities.indicador import Indicador
 
 
 # Exceções personalizadas

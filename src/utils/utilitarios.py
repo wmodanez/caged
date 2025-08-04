@@ -6,7 +6,7 @@ import logging
 from contextlib import contextmanager
 
 # Importação do sistema de logging centralizado
-from src.util.logger_config import LoggerConfig, setup_logger, log_structured
+from src.utils.logger import LoggerConfig, setup_logger, log_structured
 import logging
 
 # Usar o logger centralizado configurado no main.py

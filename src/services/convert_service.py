@@ -23,14 +23,14 @@ import logging
 logger = logging.getLogger("caged")
 
 # Imports locais - Entidades
-from src.Entity.movimentacao import Movimentacao
-from src.Entity.saldo_mensal import SaldoMensal
-from src.Entity.exclusao import Exclusao
-from src.Entity.movimentacao_fora_prazo import MovimentacaoForaPrazo
-from src.Entity.indicador import Indicador
+from src.entities.movimentacao import Movimentacao
+from src.entities.saldo_mensal import SaldoMensal
+from src.entities.exclusao import Exclusao
+from src.entities.movimentacao_fora_prazo import MovimentacaoForaPrazo
+from src.entities.indicador import Indicador
 
 # Imports locais - Utilitários
-from src.util.utilitarios import (
+from src.utils.utilitarios import (
     MedidorTempo,
     padronizar_colunas_dataframe,
     aplicar_padronizacao_colunas,
@@ -38,7 +38,7 @@ from src.util.utilitarios import (
     criar_mapeamento_caged_flexivel,
     obter_colunas_invalidas
 )
-from src.util.filtro_caged import (
+from src.utils.filtro_caged import (
     FiltroCNAE,
     FiltroPeriodo,
     FiltroMovimentacao,
@@ -618,7 +618,7 @@ class ConversorParquetCaged:
         Returns:
             Dicionário de mapeamento {coluna_original: coluna_padronizada}
         """
-        from src.util.utilitarios import padronizar_nome_coluna
+        from src.utils.utilitarios import padronizar_nome_coluna
         
         mapeamento = {}
         colunas_padronizadas = set()
