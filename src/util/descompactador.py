@@ -45,7 +45,7 @@ class DescompactadorCaged:
         from loguru import logger
         self.logger = logger
         
-    def descompactar_arquivo(self, arquivo_7z: Path, destino: Optional[Path] = None) -> Tuple[bool, Dict]:
+    def descompactar_arquivo(self, arquivo_7z: Path, destino: Optional[Path] = None, estrutura_complexa: bool = False) -> Tuple[bool, Dict]:
         """
         Descompacta um arquivo .7z específico
         
@@ -65,7 +65,7 @@ class DescompactadorCaged:
         
         if destino is None:
             # Usar método inteligente para determinar destino
-            destino = self._destino_arquivo_unzip(arquivo_7z)
+            destino = self._destino_arquivo_unzip(arquivo_7z, estrutura_complexa)
         
         destino.mkdir(parents=True, exist_ok=True)
         
@@ -1210,13 +1210,15 @@ class DescompactadorCaged:
                     self.logger.info(f"   {tipo_key}: {total_tipo} arquivo{'s' if total_tipo > 1 else ''}, "
                                    f"{descompactados_tipo} descompactado{'s' if descompactados_tipo != 1 else ''}")
     
-    def _destino_arquivo_unzip(self, arquivo_7z: Path) -> Path:
+    def _destino_arquivo_unzip(self, arquivo_7z: Path, estrutura_complexa: bool = False) -> Path:
         """
         Determina o diretório de destino inteligente para descompactação.
         Mantém estrutura hierárquica: files-unzip/ANO/MES/ ou files-unzip/ANO/
+        Suporte a estruturas complexas: files-unzip/ANO/MES/UF/ ou files-unzip/ANO/MES/TIPO/
         
         Args:
             arquivo_7z: Caminho do arquivo .7z
+            estrutura_complexa: Se deve usar estrutura de pastas complexa
             
         Returns:
             Path: Caminho do diretório de destino
@@ -1225,6 +1227,8 @@ class DescompactadorCaged:
         metadados = self._extrair_metadados_nome(arquivo_7z.name)
         ano = metadados.get('ano')
         mes = metadados.get('mes')
+        uf = metadados.get('uf')
+        tipo = metadados.get('tipo')
         
         # Estrutura base: files-unzip/ANO/
         if ano:
@@ -1249,7 +1253,168 @@ class DescompactadorCaged:
             # Sem mês específico, usar apenas o ano
             destino_final = destino_base
         
+        # Estrutura complexa adicional (opcional)
+        if estrutura_complexa:
+            # Adicionar subdiretório por UF se disponível
+            if uf and uf != 'BR':  # BR indica arquivo nacional
+                destino_final = destino_final / uf
+            
+            # Adicionar subdiretório por tipo se não for movimentação padrão
+            if tipo and tipo not in ['movimentacao', 'outros']:
+                destino_final = destino_final / tipo.upper()
+        
         return destino_final
+    
+    def _criar_estrutura_diretorios_complexa(self, metadados_lista: List[Dict]) -> Dict[str, List[Path]]:
+        """
+        Cria estrutura de diretórios complexa baseada nos metadados dos arquivos.
+        
+        Args:
+            metadados_lista: Lista de metadados dos arquivos
+            
+        Returns:
+            Dict: Mapeamento de categorias para listas de diretórios
+        """
+        from collections import defaultdict
+        
+        estrutura = {
+            'por_ano': defaultdict(list),
+            'por_uf': defaultdict(list),
+            'por_tipo': defaultdict(list),
+            'por_competencia': defaultdict(list)
+        }
+        
+        for metadados in metadados_lista:
+            ano = metadados.get('ano')
+            mes = metadados.get('mes')
+            uf = metadados.get('uf')
+            tipo = metadados.get('tipo')
+            
+            # Organizar por ano
+            if ano:
+                estrutura['por_ano'][str(ano)].append(metadados)
+            
+            # Organizar por UF
+            if uf:
+                estrutura['por_uf'][uf].append(metadados)
+            
+            # Organizar por tipo
+            if tipo:
+                estrutura['por_tipo'][tipo].append(metadados)
+            
+            # Organizar por competência (AAAAMM)
+            if ano and mes:
+                try:
+                    mes_int = int(mes) if isinstance(mes, str) else mes
+                    competencia = f"{ano}{mes_int:02d}"
+                    estrutura['por_competencia'][competencia].append(metadados)
+                except (ValueError, TypeError):
+                    pass
+        
+        return estrutura
+    
+    def _otimizar_estrutura_diretorios(self, arquivos_7z: List[Path]) -> Dict[str, Any]:
+        """
+        Analisa arquivos e sugere estrutura de diretórios otimizada.
+        
+        Args:
+            arquivos_7z: Lista de arquivos .7z
+            
+        Returns:
+            Dict: Análise e sugestões de estrutura
+        """
+        from collections import Counter
+        
+        # Extrair metadados de todos os arquivos
+        todos_metadados = []
+        for arquivo in arquivos_7z:
+            metadados = self._extrair_metadados_nome(arquivo.name)
+            metadados['arquivo'] = arquivo
+            todos_metadados.append(metadados)
+        
+        # Análise estatística
+        anos = [m.get('ano') for m in todos_metadados if m.get('ano')]
+        ufs = [m.get('uf') for m in todos_metadados if m.get('uf')]
+        tipos = [m.get('tipo') for m in todos_metadados if m.get('tipo')]
+        meses = [m.get('mes') for m in todos_metadados if m.get('mes')]
+        
+        analise = {
+            'total_arquivos': len(arquivos_7z),
+            'anos_unicos': len(set(anos)),
+            'ufs_unicas': len(set(ufs)),
+            'tipos_unicos': len(set(tipos)),
+            'meses_unicos': len(set(meses)),
+            'distribuicao_anos': dict(Counter(anos)),
+            'distribuicao_ufs': dict(Counter(ufs)),
+            'distribuicao_tipos': dict(Counter(tipos)),
+            'sugestao_estrutura_complexa': False
+        }
+        
+        # Sugerir estrutura complexa se houver diversidade suficiente
+        if analise['ufs_unicas'] > 3 or analise['tipos_unicos'] > 2:
+            analise['sugestao_estrutura_complexa'] = True
+            analise['motivo_sugestao'] = []
+            
+            if analise['ufs_unicas'] > 3:
+                analise['motivo_sugestao'].append(f"Múltiplas UFs ({analise['ufs_unicas']})")
+            
+            if analise['tipos_unicos'] > 2:
+                analise['motivo_sugestao'].append(f"Múltiplos tipos ({analise['tipos_unicos']})")
+        
+        return analise
+    
+    def _validar_estrutura_diretorios(self, diretorio_base: Path) -> Dict[str, Any]:
+        """
+        Valida a estrutura de diretórios existente.
+        
+        Args:
+            diretorio_base: Diretório base para validação
+            
+        Returns:
+            Dict: Resultado da validação
+        """
+        validacao = {
+            'estrutura_valida': True,
+            'problemas': [],
+            'estatisticas': {
+                'total_diretorios': 0,
+                'diretorios_ano': 0,
+                'diretorios_competencia': 0,
+                'diretorios_uf': 0,
+                'diretorios_tipo': 0
+            },
+            'sugestoes': []
+        }
+        
+        if not diretorio_base.exists():
+            validacao['estrutura_valida'] = False
+            validacao['problemas'].append(f"Diretório base não existe: {diretorio_base}")
+            return validacao
+        
+        # Analisar estrutura existente
+        for item in diretorio_base.rglob('*'):
+            if item.is_dir():
+                validacao['estatisticas']['total_diretorios'] += 1
+                nome = item.name
+                
+                # Verificar padrões de diretórios
+                if nome.isdigit() and len(nome) == 4 and nome.startswith('20'):
+                    validacao['estatisticas']['diretorios_ano'] += 1
+                elif nome.isdigit() and len(nome) == 6 and nome.startswith('20'):
+                    validacao['estatisticas']['diretorios_competencia'] += 1
+                elif len(nome) == 2 and nome.isupper():
+                    validacao['estatisticas']['diretorios_uf'] += 1
+                elif nome.upper() in ['MOVIMENTACAO', 'EXCLUSAO', 'FORA_PRAZO']:
+                    validacao['estatisticas']['diretorios_tipo'] += 1
+        
+        # Gerar sugestões
+        if validacao['estatisticas']['diretorios_uf'] > 0:
+            validacao['sugestoes'].append("Estrutura por UF detectada - considere usar estrutura_complexa=True")
+        
+        if validacao['estatisticas']['diretorios_tipo'] > 0:
+            validacao['sugestoes'].append("Estrutura por tipo detectada - considere usar estrutura_complexa=True")
+        
+        return validacao
     
     def _criar_barra_progresso_avancada(self, 
                                        iterable, 
