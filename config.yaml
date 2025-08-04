@@ -1,0 +1,131 @@
+profiles:
+  ci:
+    cache:
+      directory: cache_ci
+      enabled: false
+      expiry_days: 1
+      max_size_gb: 1.0
+    debug_mode: false
+    ftp:
+      directory: /pdet/microdados/NOVO CAGED
+      max_retries: 2
+      server: ftp.mtps.gov.br
+      timeout: 30
+    logging:
+      enable_console: true
+      enable_file: true
+      level: INFO
+      use_emojis: false
+    output:
+      compression: snappy
+      directory: output_ci
+      format: parquet
+    processing:
+      chunk_size: 5000
+      enable_parallel: true
+      max_workers: 2
+      memory_limit_gb: 2.0
+  default:
+    cache:
+      directory: cache
+      enabled: true
+      expiry_days: 30
+      max_size_gb: 10
+    debug_mode: false
+    ftp:
+      directory: /pdet/microdados/NOVO CAGED
+      max_retries: 3
+      server: ftp.mtps.gov.br
+      timeout: 30
+    logging:
+      enable_console: true
+      enable_file: true
+      level: INFO
+      use_emojis: true
+    output:
+      compression: snappy
+      directory: output
+      format: parquet
+    processing:
+      chunk_size: 1000
+      enable_parallel: true
+      max_workers: 6
+      memory_limit_gb: 8
+  dev:
+    cache:
+      directory: cache_dev
+      enabled: true
+      expiry_days: 7
+      max_size_gb: 10.0
+    debug_mode: true
+    ftp:
+      directory: /pdet/microdados/NOVO CAGED
+      max_retries: 5
+      server: ftp.mtps.gov.br
+      timeout: 60
+    logging:
+      enable_console: true
+      enable_file: true
+      level: DEBUG
+      use_emojis: true
+    output:
+      compression: snappy
+      directory: output_dev
+      format: parquet
+    processing:
+      chunk_size: 5000
+      enable_parallel: false
+      max_workers: 2
+      memory_limit_gb: 2.0
+  prod:
+    cache:
+      directory: /var/cache/caged
+      enabled: true
+      expiry_days: 90
+      max_size_gb: 20.0
+    debug_mode: false
+    ftp:
+      directory: /pdet/microdados/NOVO CAGED
+      max_retries: 3
+      server: ftp.mtps.gov.br
+      timeout: 45
+    logging:
+      enable_console: false
+      enable_file: true
+      level: WARNING
+      use_emojis: false
+    output:
+      compression: gzip
+      directory: /var/data/caged/output
+      format: parquet
+    processing:
+      chunk_size: 50000
+      enable_parallel: true
+      max_workers: 8
+      memory_limit_gb: 16.0
+  test:
+    cache:
+      directory: cache_test
+      enabled: false
+      expiry_days: 1
+      max_size_gb: 1.0
+    debug_mode: false
+    ftp:
+      directory: /pdet/microdados/NOVO CAGED
+      max_retries: 1
+      server: ftp.mtps.gov.br
+      timeout: 15
+    logging:
+      enable_console: true
+      enable_file: false
+      level: ERROR
+      use_emojis: false
+    output:
+      compression: none
+      directory: output_test
+      format: csv
+    processing:
+      chunk_size: 1000
+      enable_parallel: false
+      max_workers: 1
+      memory_limit_gb: 1.0

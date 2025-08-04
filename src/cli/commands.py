@@ -327,14 +327,17 @@ def config_show(ctx):
         click.echo(f"  Servidor: {config.ftp.server}")
         click.echo(f"  Diretório: {config.ftp.directory}")
         click.echo(f"  Timeout: {config.ftp.timeout}s")
+        click.echo(f"  Max retries: {config.ftp.max_retries}")
         
         click.echo(f"\n💾 Cache:")
         click.echo(f"  Habilitado: {config.cache.enabled}")
         click.echo(f"  Diretório: {config.cache.directory}")
         click.echo(f"  Tamanho máximo: {config.cache.max_size_gb}GB")
+        click.echo(f"  Expiração: {config.cache.expiry_days} dias")
         
         click.echo(f"\n⚙️ Processamento:")
         click.echo(f"  Workers: {config.processing.max_workers}")
+        click.echo(f"  Chunk size: {config.processing.chunk_size:,}")
         click.echo(f"  Paralelo: {config.processing.enable_parallel}")
         click.echo(f"  Limite de memória: {config.processing.memory_limit_gb}GB")
         
@@ -343,8 +346,167 @@ def config_show(ctx):
         click.echo(f"  Compressão: {config.output.compression}")
         click.echo(f"  Diretório: {config.output.directory}")
         
+        click.echo(f"\n📝 Logging:")
+        click.echo(f"  Nível: {config.logging.level}")
+        click.echo(f"  Arquivo: {config.logging.enable_file}")
+        click.echo(f"  Console: {config.logging.enable_console}")
+        click.echo(f"  Emojis: {config.logging.use_emojis}")
+        
+        click.echo(f"\n🐛 Debug: {config.debug_mode}")
+        
     except Exception as e:
         click.echo(f"❌ Erro ao carregar configuração: {e}", err=True)
+        sys.exit(1)
+
+
+@cli.command()
+@click.option('--profile', default='default', help='Profile de configuração')
+@click.pass_context
+def config_validate(ctx, profile):
+    """
+    ✅ Validar configuração
+    """
+    try:
+        config_manager = ConfigManager(ctx.obj.get('config_file'))
+        config = config_manager.load_config(profile)
+        
+        click.echo(f"🔍 Validando configuração (profile: {profile})...")
+        
+        # A validação já é feita automaticamente no load_config
+        # Se chegou até aqui, a configuração é válida
+        click.echo("✅ Configuração válida!")
+        
+        # Mostrar algumas informações úteis
+        click.echo(f"\n📊 Resumo da configuração:")
+        click.echo(f"  🌐 FTP: {config.ftp.server}")
+        click.echo(f"  💾 Cache: {'habilitado' if config.cache.enabled else 'desabilitado'}")
+        click.echo(f"  ⚙️ Workers: {config.processing.max_workers}")
+        click.echo(f"  📤 Formato: {config.output.format}")
+        click.echo(f"  📝 Log level: {config.logging.level}")
+        
+    except Exception as e:
+        click.echo(f"❌ Configuração inválida: {e}", err=True)
+        sys.exit(1)
+
+
+@cli.command()
+@click.option('--profile', default='default', help='Profile de configuração')
+@click.option('--list-profiles', is_flag=True, help='Listar perfis disponíveis')
+@click.pass_context
+def config_list(ctx, profile, list_profiles):
+    """
+    📋 Listar perfis de configuração disponíveis
+    """
+    try:
+        config_manager = ConfigManager(ctx.obj.get('config_file'))
+        
+        if not config_manager.config_file.exists():
+            click.echo("⚠️ Arquivo de configuração não encontrado")
+            click.echo(f"💡 Execute 'python main.py config-create' para criar um arquivo padrão")
+            return
+        
+        # Carregar arquivo YAML para listar perfis
+        import yaml
+        with open(config_manager.config_file, 'r', encoding='utf-8') as f:
+            data = yaml.safe_load(f)
+        
+        if 'profiles' not in data:
+            click.echo("⚠️ Nenhum perfil encontrado no arquivo de configuração")
+            return
+        
+        profiles = data['profiles']
+        click.echo(f"📋 Perfis disponíveis em {config_manager.config_file}:")
+        
+        for profile_name in sorted(profiles.keys()):
+            profile_data = profiles[profile_name]
+            
+            # Extrair informações básicas
+            ftp_server = profile_data.get('ftp', {}).get('server', 'N/A')
+            cache_enabled = profile_data.get('cache', {}).get('enabled', False)
+            workers = profile_data.get('processing', {}).get('max_workers', 'N/A')
+            output_format = profile_data.get('output', {}).get('format', 'N/A')
+            
+            status = "✅" if profile_name == ctx.obj['profile'] else "📋"
+            click.echo(f"\n{status} {profile_name}:")
+            click.echo(f"    🌐 FTP: {ftp_server}")
+            click.echo(f"    💾 Cache: {'habilitado' if cache_enabled else 'desabilitado'}")
+            click.echo(f"    ⚙️ Workers: {workers}")
+            click.echo(f"    📤 Formato: {output_format}")
+        
+        if ctx.obj['profile'] in profiles:
+            click.echo(f"\n🎯 Perfil atual: {ctx.obj['profile']}")
+        else:
+            click.echo(f"\n⚠️ Perfil atual '{ctx.obj['profile']}' não encontrado no arquivo")
+        
+    except Exception as e:
+        click.echo(f"❌ Erro ao listar perfis: {e}", err=True)
+        sys.exit(1)
+
+
+@cli.command()
+@click.option('--profile', default='default', help='Profile de configuração')
+@click.option('--section', help='Seção da configuração (ftp, cache, processing, output, logging)')
+@click.option('--key', help='Chave da configuração')
+@click.option('--value', help='Novo valor')
+@click.pass_context
+def config_set(ctx, profile, section, key, value):
+    """
+    ⚙️ Definir valor de configuração
+    
+    Exemplos:
+    python main.py config-set --section ftp --key timeout --value 60
+    python main.py config-set --section processing --key max_workers --value 8
+    """
+    if not all([section, key, value]):
+        click.echo("❌ Todos os parâmetros são obrigatórios: --section, --key, --value")
+        sys.exit(1)
+    
+    try:
+        config_manager = ConfigManager(ctx.obj.get('config_file'))
+        config = config_manager.load_config(profile)
+        
+        # Verificar se a seção existe
+        if not hasattr(config, section):
+            click.echo(f"❌ Seção '{section}' não encontrada")
+            click.echo("💡 Seções disponíveis: ftp, cache, processing, output, logging")
+            sys.exit(1)
+        
+        section_obj = getattr(config, section)
+        
+        # Verificar se a chave existe
+        if not hasattr(section_obj, key):
+            available_keys = [attr for attr in dir(section_obj) if not attr.startswith('_')]
+            click.echo(f"❌ Chave '{key}' não encontrada na seção '{section}'")
+            click.echo(f"💡 Chaves disponíveis: {', '.join(available_keys)}")
+            sys.exit(1)
+        
+        # Converter valor para o tipo correto
+        current_value = getattr(section_obj, key)
+        if isinstance(current_value, bool):
+            value = value.lower() in ('true', '1', 'yes', 'on')
+        elif isinstance(current_value, int):
+            value = int(value)
+        elif isinstance(current_value, float):
+            value = float(value)
+        
+        # Definir novo valor
+        setattr(section_obj, key, value)
+        
+        # Validar configuração
+        config_manager._validate_config(config)
+        
+        # Salvar configuração
+        config_manager.save_config(config, profile)
+        
+        click.echo(f"✅ Configuração atualizada:")
+        click.echo(f"   📋 Profile: {profile}")
+        click.echo(f"   🔧 {section}.{key} = {value}")
+        
+    except ValueError as e:
+        click.echo(f"❌ Erro de conversão de tipo: {e}", err=True)
+        sys.exit(1)
+    except Exception as e:
+        click.echo(f"❌ Erro ao definir configuração: {e}", err=True)
         sys.exit(1)
 
 
