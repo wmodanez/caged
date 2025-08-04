@@ -112,13 +112,15 @@ class DescompactadorCaged:
                 pass
             return False, {"erro": str(e), "arquivo": str(arquivo_7z)}
     
-    def descompactar_mensal(self, ano: int, mes: int) -> Tuple[bool, List[Dict]]:
+    def descompactar_mensal(self, ano: int, mes: int, usar_paralelo: bool = True, max_workers: Optional[int] = None) -> Tuple[bool, List[Dict]]:
         """
-        Descompacta todos os arquivos de um mês específico
+        Descompacta todos os arquivos de um mês específico com otimizações avançadas
         
         Args:
             ano: Ano dos dados
             mes: Mês dos dados
+            usar_paralelo: Se deve usar processamento paralelo (padrão: True)
+            max_workers: Número máximo de workers para processamento paralelo
             
         Returns:
             Tuple[bool, List[Dict]]: (Sucesso, Lista de metadados)
@@ -147,6 +149,38 @@ class DescompactadorCaged:
         # Criar diretório de destino
         diretorio_destino_mes.mkdir(parents=True, exist_ok=True)
         
+        # Se usar processamento paralelo e há muitos arquivos, usar método paralelo otimizado
+        if usar_paralelo and len(arquivos_7z) > 3:
+            self.logger.info(f"🚀 Usando processamento paralelo para {len(arquivos_7z)} arquivos")
+            
+            # Usar filtro específico para o mês
+            total, descompactados, falhas, metadados_lista = self.descompactar_arquivos_paralelo(
+                max_workers=max_workers or self.max_workers,
+                ano=ano
+            )
+            
+            # Filtrar apenas os arquivos do mês específico
+            metadados_mes = []
+            sucessos = 0
+            
+            for metadados in metadados_lista:
+                if metadados.get('mes') == f"{mes:02d}":
+                    metadados_mes.append(metadados)
+                    if 'arquivos_extraidos' in metadados:
+                        sucessos += 1
+            
+            # Criar indicador específico para a competência
+            indicador = self._criar_indicador_competencia(ano, mes, sucessos, len(arquivos_7z))
+            
+            # Processar dados dos arquivos descompactados se solicitado
+            if sucessos > 0:
+                self.logger.info(f"🔄 Processando dados dos arquivos descompactados de {ano}/{mes:02d}...")
+                entidades_criadas = self._processar_dados_mes(ano, mes, metadados_mes)
+                self.logger.info(f"📊 {len(entidades_criadas)} entidades CAGED criadas para {ano}/{mes:02d}")
+            
+            return sucessos > 0, metadados_mes
+        
+        # Processamento sequencial otimizado (para poucos arquivos ou quando paralelo é desabilitado)
         sucessos = 0
         metadados_lista = []
         
@@ -637,54 +671,189 @@ class DescompactadorCaged:
     
     def _extrair_metadados_nome(self, nome_arquivo: str) -> Dict:
         """
-        Extrai metadados do nome do arquivo
+        Extrai metadados específicos do CAGED do nome do arquivo
         
         Args:
             nome_arquivo: Nome do arquivo
             
         Returns:
-            Dict: Metadados extraídos
+            Dict: Metadados extraídos com informações específicas do CAGED
         """
         metadados = {
             "nome_arquivo": nome_arquivo,
-            "data_processamento": datetime.now().isoformat()
+            "data_processamento": datetime.now().isoformat(),
+            "fonte": "CAGED"
         }
         
-        # Extrair ano
+        # Extrair ano (formato 20XX)
         ano_match = re.search(r'(20\d{2})', nome_arquivo)
         if ano_match:
-            metadados["ano"] = ano_match.group(1)
+            metadados["ano"] = int(ano_match.group(1))
         
-        # Extrair mês
+        # Extrair mês (formato YYYYMM)
         mes_match = re.search(r'(20\d{2})(\d{2})', nome_arquivo)
         if mes_match and 1 <= int(mes_match.group(2)) <= 12:
-            metadados["mes"] = mes_match.group(2)
+            metadados["mes"] = int(mes_match.group(2))
+            metadados["competencia"] = f"{metadados['ano']}-{metadados['mes']:02d}"
         
-        # Tentar identificar UF
+        # Identificar UF com padrões específicos do CAGED
         ufs = ["AC", "AL", "AM", "AP", "BA", "CE", "DF", "ES", "GO", "MA", 
                "MG", "MS", "MT", "PA", "PB", "PE", "PI", "PR", "RJ", "RN", 
                "RO", "RR", "RS", "SC", "SE", "SP", "TO"]
         
+        # Busca mais robusta de UF no nome do arquivo
+        nome_upper = nome_arquivo.upper()
         for uf in ufs:
-            if uf in nome_arquivo:
+            # Buscar UF como palavra separada ou no final/início
+            if re.search(rf'\b{uf}\b|{uf}_|_{uf}|{uf}\d|\d{uf}', nome_upper):
                 metadados["uf"] = uf
                 break
         
-        # Identificar tipo de arquivo
-        if "MOVIMENTACAO" in nome_arquivo.upper():
+        # Identificar tipo de arquivo com padrões específicos do CAGED
+        if re.search(r'MOVIMENTAC[AÃ]O|MOVIMENT|MOV(?!IMENTO)', nome_upper):
             metadados["tipo"] = "movimentacao"
-        elif "EXCLUSAO" in nome_arquivo.upper():
+        elif re.search(r'EXCLUS[AÃ]O|EXCL', nome_upper):
             metadados["tipo"] = "exclusao"
-        elif "FORA_PRAZO" in nome_arquivo.upper() or "FORAPRAZO" in nome_arquivo.upper():
+        elif re.search(r'FORA[_\s]?PRAZO|FORAPRAZO|FORA_PRAZO', nome_upper):
             metadados["tipo"] = "fora_prazo"
+        elif re.search(r'SALDO[_\s]?MENSAL|SALDO', nome_upper):
+            metadados["tipo"] = "saldo_mensal"
         else:
             metadados["tipo"] = "outros"
-            
-        # Criar competência formatada
-        if "ano" in metadados and "mes" in metadados:
-            metadados["competencia"] = f"{metadados['ano']}-{int(metadados['mes']):02d}"
+        
+        # Identificar modalidade (Novo CAGED vs CAGED Antigo)
+        if re.search(r'NOVO[_\s]?CAGED|NCAGED', nome_upper):
+            metadados["modalidade"] = "novo_caged"
+        elif re.search(r'CAGED[_\s]?ANTIGO|ACAGED', nome_upper):
+            metadados["modalidade"] = "caged_antigo"
+        else:
+            metadados["modalidade"] = "padrao"
+        
+        # Adicionar informações de entidade correspondente
+        metadados["entidade_classe"] = self._mapear_entidade_classe(metadados.get("tipo", "outros"))
         
         return metadados
+    
+    def _mapear_entidade_classe(self, tipo_arquivo: str) -> str:
+        """
+        Mapeia o tipo de arquivo para a classe de entidade correspondente
+        
+        Args:
+            tipo_arquivo: Tipo do arquivo identificado
+            
+        Returns:
+            str: Nome da classe de entidade
+        """
+        mapeamento = {
+            "movimentacao": "Movimentacao",
+            "exclusao": "Exclusao",
+            "fora_prazo": "MovimentacaoForaPrazo",
+            "saldo_mensal": "SaldoMensal",
+            "outros": "Movimentacao"  # Fallback padrão
+        }
+        
+        return mapeamento.get(tipo_arquivo, "Movimentacao")
+    
+    def criar_entidade_caged(self, metadados: Dict, dados_arquivo: Optional[Dict] = None) -> Any:
+        """
+        Cria uma instância da entidade CAGED apropriada baseada nos metadados
+        
+        Args:
+            metadados: Metadados extraídos do arquivo
+            dados_arquivo: Dados opcionais do arquivo para popular a entidade
+            
+        Returns:
+            Instância da entidade CAGED apropriada
+        """
+        tipo_arquivo = metadados.get("tipo", "movimentacao")
+        entidade_classe = metadados.get("entidade_classe", "Movimentacao")
+        
+        # Dados padrão para a entidade
+        dados_entidade = {
+            "competencia": metadados.get("competencia", ""),
+            "uf": metadados.get("uf", ""),
+            "fonte_arquivo": metadados.get("nome_arquivo", ""),
+            "data_processamento": metadados.get("data_processamento", datetime.now().isoformat())
+        }
+        
+        # Adicionar dados específicos do arquivo se fornecidos
+        if dados_arquivo:
+            dados_entidade.update(dados_arquivo)
+        
+        try:
+            if tipo_arquivo == "movimentacao":
+                return Movimentacao(
+                    id=0,  # ID será atribuído na persistência
+                    cnpj=dados_entidade.get("cnpj", ""),
+                    competencia=dados_entidade["competencia"],
+                    uf=dados_entidade["uf"],
+                    municipio=dados_entidade.get("municipio", ""),
+                    estabelecimento=dados_entidade.get("estabelecimento", ""),
+                    admissoes=dados_entidade.get("admissoes", 0),
+                    desligamentos=dados_entidade.get("desligamentos", 0),
+                    saldo=dados_entidade.get("saldo", 0)
+                )
+            elif tipo_arquivo == "exclusao":
+                return Exclusao(
+                    id=0,
+                    cnpj=dados_entidade.get("cnpj", ""),
+                    competencia=dados_entidade["competencia"],
+                    motivo_exclusao=dados_entidade.get("motivo_exclusao", ""),
+                    data_exclusao=dados_entidade.get("data_exclusao", "")
+                )
+            elif tipo_arquivo == "fora_prazo":
+                return MovimentacaoForaPrazo(
+                    id=0,
+                    cnpj=dados_entidade.get("cnpj", ""),
+                    competencia=dados_entidade["competencia"],
+                    uf=dados_entidade["uf"],
+                    municipio=dados_entidade.get("municipio", ""),
+                    estabelecimento=dados_entidade.get("estabelecimento", ""),
+                    admissoes=dados_entidade.get("admissoes", 0),
+                    desligamentos=dados_entidade.get("desligamentos", 0),
+                    saldo=dados_entidade.get("saldo", 0),
+                    data_declaracao=dados_entidade.get("data_declaracao", "")
+                )
+            elif tipo_arquivo == "saldo_mensal":
+                return SaldoMensal(
+                    id=0,
+                    cnpj=dados_entidade.get("cnpj", ""),
+                    competencia=dados_entidade["competencia"],
+                    uf=dados_entidade["uf"],
+                    municipio=dados_entidade.get("municipio", ""),
+                    estabelecimento=dados_entidade.get("estabelecimento", ""),
+                    saldo_inicial=dados_entidade.get("saldo_inicial", 0),
+                    admissoes=dados_entidade.get("admissoes", 0),
+                    desligamentos=dados_entidade.get("desligamentos", 0),
+                    saldo_final=dados_entidade.get("saldo_final", 0)
+                )
+            else:
+                # Fallback para Movimentacao
+                return Movimentacao(
+                    id=0,
+                    cnpj=dados_entidade.get("cnpj", ""),
+                    competencia=dados_entidade["competencia"],
+                    uf=dados_entidade["uf"],
+                    municipio=dados_entidade.get("municipio", ""),
+                    estabelecimento=dados_entidade.get("estabelecimento", ""),
+                    admissoes=dados_entidade.get("admissoes", 0),
+                    desligamentos=dados_entidade.get("desligamentos", 0),
+                    saldo=dados_entidade.get("saldo", 0)
+                )
+        except Exception as e:
+            self.logger.error(f"❌ Erro ao criar entidade {entidade_classe}: {e}")
+            # Retornar entidade básica em caso de erro
+            return Movimentacao(
+                id=0,
+                cnpj="",
+                competencia=dados_entidade.get("competencia", ""),
+                uf=dados_entidade.get("uf", ""),
+                municipio="",
+                estabelecimento="",
+                admissoes=0,
+                desligamentos=0,
+                saldo=0
+            )
     
     def _verificar_arquivo_zip(self, caminho_arquivo_zip: Path) -> Dict[str, Any]:
         """
@@ -1750,6 +1919,378 @@ class DescompactadorCaged:
             "por_tipo": tipos,
             "por_competencia": competencias
         }
+    
+    def processar_dados_arquivo_caged(self, arquivo_descompactado: Path, metadados: Dict) -> List[Any]:
+        """
+        Processa os dados de um arquivo descompactado e cria entidades CAGED
+        
+        Args:
+            arquivo_descompactado: Caminho do arquivo descompactado (.txt ou .csv)
+            metadados: Metadados extraídos do arquivo
+            
+        Returns:
+            Lista de entidades CAGED criadas
+        """
+        entidades = []
+        
+        try:
+            if not arquivo_descompactado.exists():
+                self.logger.warning(f"⚠️  Arquivo não encontrado: {arquivo_descompactado}")
+                return entidades
+            
+            # Determinar o tipo de arquivo e processamento
+            extensao = arquivo_descompactado.suffix.lower()
+            
+            if extensao == '.txt':
+                entidades = self._processar_arquivo_txt_caged(arquivo_descompactado, metadados)
+            elif extensao == '.csv':
+                entidades = self._processar_arquivo_csv_caged(arquivo_descompactado, metadados)
+            else:
+                self.logger.warning(f"⚠️  Tipo de arquivo não suportado: {extensao}")
+            
+            self.logger.info(f"📋 Processadas {len(entidades)} entidades de {arquivo_descompactado.name}")
+            
+        except Exception as e:
+            self.logger.error(f"❌ Erro ao processar arquivo {arquivo_descompactado}: {e}")
+        
+        return entidades
+    
+    def _processar_arquivo_txt_caged(self, arquivo_txt: Path, metadados: Dict) -> List[Any]:
+        """
+        Processa um arquivo .txt do CAGED e cria entidades
+        
+        Args:
+            arquivo_txt: Caminho do arquivo .txt
+            metadados: Metadados extraídos
+            
+        Returns:
+            Lista de entidades criadas
+        """
+        entidades = []
+        
+        try:
+            with open(arquivo_txt, 'r', encoding='utf-8', errors='ignore') as f:
+                linhas = f.readlines()
+            
+            # Processar cada linha (assumindo formato específico do CAGED)
+            for i, linha in enumerate(linhas):
+                linha = linha.strip()
+                if not linha or linha.startswith('#'):  # Pular linhas vazias e comentários
+                    continue
+                
+                try:
+                    # Parsear dados da linha (formato específico do CAGED)
+                    dados_linha = self._parsear_linha_caged(linha, metadados)
+                    if dados_linha:
+                        entidade = self.criar_entidade_caged(metadados, dados_linha)
+                        entidades.append(entidade)
+                        
+                except Exception as e:
+                    self.logger.debug(f"⚠️  Erro na linha {i+1} de {arquivo_txt.name}: {e}")
+                    continue
+                    
+        except Exception as e:
+            self.logger.error(f"❌ Erro ao ler arquivo {arquivo_txt}: {e}")
+        
+        return entidades
+    
+    def _processar_arquivo_csv_caged(self, arquivo_csv: Path, metadados: Dict) -> List[Any]:
+        """
+        Processa um arquivo .csv do CAGED e cria entidades
+        
+        Args:
+            arquivo_csv: Caminho do arquivo .csv
+            metadados: Metadados extraídos
+            
+        Returns:
+            Lista de entidades criadas
+        """
+        entidades = []
+        
+        try:
+            import pandas as pd
+            
+            # Ler CSV com tratamento de erros
+            df = pd.read_csv(
+                arquivo_csv, 
+                encoding='utf-8', 
+                sep=';',  # Separador comum em arquivos CAGED
+                on_bad_lines='skip',
+                low_memory=False
+            )
+            
+            # Processar cada linha do DataFrame
+            for index, row in df.iterrows():
+                try:
+                    dados_linha = self._converter_row_para_dict(row, metadados)
+                    if dados_linha:
+                        entidade = self.criar_entidade_caged(metadados, dados_linha)
+                        entidades.append(entidade)
+                        
+                except Exception as e:
+                    self.logger.debug(f"⚠️  Erro na linha {index+1} de {arquivo_csv.name}: {e}")
+                    continue
+                    
+        except Exception as e:
+            self.logger.error(f"❌ Erro ao ler CSV {arquivo_csv}: {e}")
+        
+        return entidades
+    
+    def _parsear_linha_caged(self, linha: str, metadados: Dict) -> Optional[Dict]:
+        """
+        Parseia uma linha de arquivo .txt do CAGED
+        
+        Args:
+            linha: Linha do arquivo
+            metadados: Metadados do arquivo
+            
+        Returns:
+            Dicionário com dados parseados ou None
+        """
+        try:
+            # Formato típico do CAGED (ajustar conforme necessário)
+            # Exemplo: CNPJ;UF;Município;Estabelecimento;Admissões;Desligamentos
+            campos = linha.split(';')
+            
+            if len(campos) < 6:
+                return None
+            
+            return {
+                "cnpj": campos[0].strip(),
+                "uf": campos[1].strip(),
+                "municipio": campos[2].strip(),
+                "estabelecimento": campos[3].strip(),
+                "admissoes": int(campos[4].strip()) if campos[4].strip().isdigit() else 0,
+                "desligamentos": int(campos[5].strip()) if campos[5].strip().isdigit() else 0,
+                "saldo": int(campos[4].strip()) - int(campos[5].strip()) if campos[4].strip().isdigit() and campos[5].strip().isdigit() else 0
+            }
+            
+        except Exception as e:
+            self.logger.debug(f"Erro ao parsear linha: {e}")
+            return None
+    
+    def _converter_row_para_dict(self, row, metadados: Dict) -> Optional[Dict]:
+        """
+        Converte uma linha do pandas DataFrame para dicionário
+        
+        Args:
+            row: Linha do DataFrame
+            metadados: Metadados do arquivo
+            
+        Returns:
+            Dicionário com dados convertidos ou None
+        """
+        try:
+            # Mapear colunas do CSV para campos da entidade
+            # Ajustar conforme estrutura real dos arquivos CAGED
+            dados = {}
+            
+            # Campos comuns
+            if 'cnpj' in row.index:
+                dados['cnpj'] = str(row['cnpj']).strip()
+            elif 'CNPJ' in row.index:
+                dados['cnpj'] = str(row['CNPJ']).strip()
+            
+            if 'uf' in row.index:
+                dados['uf'] = str(row['uf']).strip()
+            elif 'UF' in row.index:
+                dados['uf'] = str(row['UF']).strip()
+            
+            if 'municipio' in row.index:
+                dados['municipio'] = str(row['municipio']).strip()
+            elif 'Município' in row.index:
+                dados['municipio'] = str(row['Município']).strip()
+            
+            # Campos numéricos
+            for campo_num in ['admissoes', 'desligamentos', 'saldo', 'saldo_inicial', 'saldo_final']:
+                if campo_num in row.index:
+                    try:
+                        dados[campo_num] = int(float(str(row[campo_num]).replace(',', '.')))
+                    except:
+                        dados[campo_num] = 0
+            
+            return dados if dados else None
+            
+        except Exception as e:
+            self.logger.debug(f"Erro ao converter row: {e}")
+            return None
+    
+    def _processar_dados_mes(self, ano: int, mes: int, metadados_lista: List[Dict]) -> List[Any]:
+        """
+        Processa todos os dados dos arquivos descompactados de um mês específico
+        
+        Args:
+            ano: Ano dos dados
+            mes: Mês dos dados
+            metadados_lista: Lista de metadados dos arquivos processados
+            
+        Returns:
+            Lista de todas as entidades CAGED criadas
+        """
+        entidades_totais = []
+        
+        try:
+            # Filtrar apenas metadados do mês específico
+            metadados_mes = [
+                meta for meta in metadados_lista 
+                if meta.get('mes') == f"{mes:02d}" and 'destino' in meta
+            ]
+            
+            if not metadados_mes:
+                self.logger.warning(f"⚠️  Nenhum arquivo processado encontrado para {ano}/{mes:02d}")
+                return entidades_totais
+            
+            # Processar cada arquivo descompactado
+            for metadados in metadados_mes:
+                destino = Path(metadados['destino'])
+                
+                if not destino.exists():
+                    self.logger.warning(f"⚠️  Diretório não encontrado: {destino}")
+                    continue
+                
+                # Encontrar arquivos .txt e .csv no diretório
+                arquivos_dados = list(destino.glob("*.txt")) + list(destino.glob("*.csv"))
+                
+                for arquivo_dados in arquivos_dados:
+                    try:
+                        entidades = self.processar_dados_arquivo_caged(arquivo_dados, metadados)
+                        entidades_totais.extend(entidades)
+                        
+                    except Exception as e:
+                        self.logger.error(f"❌ Erro ao processar {arquivo_dados}: {e}")
+                        continue
+            
+            # Criar indicadores adicionais baseados nas entidades processadas
+            if entidades_totais:
+                self._criar_indicadores_entidades(ano, mes, entidades_totais)
+            
+        except Exception as e:
+            self.logger.error(f"❌ Erro ao processar dados do mês {ano}/{mes:02d}: {e}")
+        
+        return entidades_totais
+    
+    def _criar_indicadores_entidades(self, ano: int, mes: int, entidades: List[Any]) -> List[Indicador]:
+        """
+        Cria indicadores baseados nas entidades processadas
+        
+        Args:
+            ano: Ano dos dados
+            mes: Mês dos dados
+            entidades: Lista de entidades processadas
+            
+        Returns:
+            Lista de indicadores criados
+        """
+        indicadores = []
+        competencia = f"{ano}-{mes:02d}"
+        
+        try:
+            # Contar entidades por tipo
+            contadores = {
+                'movimentacao': 0,
+                'exclusao': 0,
+                'fora_prazo': 0,
+                'saldo_mensal': 0
+            }
+            
+            # Estatísticas agregadas
+            total_admissoes = 0
+            total_desligamentos = 0
+            total_saldo = 0
+            ufs_processadas = set()
+            
+            for entidade in entidades:
+                # Contar por tipo
+                tipo_entidade = type(entidade).__name__.lower()
+                if 'movimentacao' in tipo_entidade:
+                    if 'fora_prazo' in tipo_entidade:
+                        contadores['fora_prazo'] += 1
+                    else:
+                        contadores['movimentacao'] += 1
+                elif 'exclusao' in tipo_entidade:
+                    contadores['exclusao'] += 1
+                elif 'saldo' in tipo_entidade:
+                    contadores['saldo_mensal'] += 1
+                
+                # Agregar estatísticas
+                if hasattr(entidade, 'admissoes'):
+                    total_admissoes += getattr(entidade, 'admissoes', 0)
+                if hasattr(entidade, 'desligamentos'):
+                    total_desligamentos += getattr(entidade, 'desligamentos', 0)
+                if hasattr(entidade, 'saldo'):
+                    total_saldo += getattr(entidade, 'saldo', 0)
+                if hasattr(entidade, 'uf'):
+                    uf = getattr(entidade, 'uf', '')
+                    if uf:
+                        ufs_processadas.add(uf)
+            
+            # Criar indicadores
+            indicadores.extend([
+                Indicador(
+                    id=0,
+                    cnpj="SISTEMA",
+                    competencia=competencia,
+                    nome_indicador="TOTAL_ENTIDADES_PROCESSADAS",
+                    valor=len(entidades)
+                ),
+                Indicador(
+                    id=0,
+                    cnpj="SISTEMA",
+                    competencia=competencia,
+                    nome_indicador="TOTAL_MOVIMENTACOES",
+                    valor=contadores['movimentacao']
+                ),
+                Indicador(
+                    id=0,
+                    cnpj="SISTEMA",
+                    competencia=competencia,
+                    nome_indicador="TOTAL_EXCLUSOES",
+                    valor=contadores['exclusao']
+                ),
+                Indicador(
+                    id=0,
+                    cnpj="SISTEMA",
+                    competencia=competencia,
+                    nome_indicador="TOTAL_FORA_PRAZO",
+                    valor=contadores['fora_prazo']
+                ),
+                Indicador(
+                    id=0,
+                    cnpj="SISTEMA",
+                    competencia=competencia,
+                    nome_indicador="TOTAL_ADMISSOES",
+                    valor=total_admissoes
+                ),
+                Indicador(
+                    id=0,
+                    cnpj="SISTEMA",
+                    competencia=competencia,
+                    nome_indicador="TOTAL_DESLIGAMENTOS",
+                    valor=total_desligamentos
+                ),
+                Indicador(
+                    id=0,
+                    cnpj="SISTEMA",
+                    competencia=competencia,
+                    nome_indicador="SALDO_LIQUIDO",
+                    valor=total_saldo
+                ),
+                Indicador(
+                    id=0,
+                    cnpj="SISTEMA",
+                    competencia=competencia,
+                    nome_indicador="UFS_PROCESSADAS",
+                    valor=len(ufs_processadas)
+                )
+            ])
+            
+            self.logger.info(f"📊 {len(indicadores)} indicadores criados para {competencia}")
+            self.logger.info(f"   📈 {len(entidades)} entidades, {len(ufs_processadas)} UFs, {total_admissoes} admissões, {total_desligamentos} desligamentos")
+            
+        except Exception as e:
+            self.logger.error(f"❌ Erro ao criar indicadores para {competencia}: {e}")
+        
+        return indicadores
 
 
 # Função auxiliar para teste
