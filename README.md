@@ -137,13 +137,15 @@ caged/
 ├── config/                   # Arquivos de configuração
 ├── cache/                    # Cache do sistema
 ├── examples/                 # Exemplos de uso
-│   └── cache_usage_example.py # Exemplo de uso do cache
+│   ├── cache_usage_example.py # Exemplo de uso do cache
+│   └── parallel_processing_example.py # Exemplo de processamento paralelo
 ├── files-zip/                # Arquivos baixados (7z)
 ├── files-unzip/              # Arquivos descompactados
 ├── parquet/                  # Dados processados (Parquet)
 ├── logs/                     # Logs de execução
 ├── tests/                    # Testes automatizados
 │   ├── test_cache.py         # Testes do sistema de cache
+│   ├── test_parallel_pipeline.py # Testes do processamento paralelo
 │   └── test_validators.py    # Testes dos validadores
 └── src/                      # Código fonte
     ├── cli/                  # Interface de linha de comando
@@ -186,6 +188,26 @@ O sistema implementa um cache avançado para otimizar o processamento de dados:
 - **Persistência**: Metadados salvos em JSON para recuperação entre sessões
 - **Métricas Detalhadas**: Estatísticas de uso, hit rate e performance
 
+## ⚡ Sistema de Processamento Paralelo
+
+O sistema implementa processamento paralelo avançado para otimizar performance:
+
+### 🎯 Funcionalidades do Processamento Paralelo
+
+- **Controle Inteligente de Recursos**: Monitoramento em tempo real de CPU, memória e disco
+- **Pool de Conexões**: Gerenciamento eficiente de conexões de banco de dados
+- **Cache Integrado**: Cache de resultados com serialização automática
+- **Ajuste Automático**: Número de workers baseado na carga do sistema
+- **Sistema de Throttling**: Prevenção de sobrecarga do sistema
+- **Estatísticas Detalhadas**: Métricas de performance e uso de recursos
+
+### 📈 Benefícios de Performance
+
+- **Processamento Assíncrono**: Execução paralela de tarefas independentes
+- **Monitoramento de Recursos**: Ajuste automático baseado na carga do sistema
+- **Recovery Automático**: Tratamento robusto de erros e falhas
+- **Logging Estruturado**: Acompanhamento detalhado do progresso
+
 ### 📈 Benefícios de Performance
 
 - **Redução de Downloads**: Evita re-download de arquivos já processados
@@ -209,9 +231,29 @@ python main.py cache-clear --all
 python main.py cache-clear --category downloads
 ```
 
-### ⚙️ Configuração do Cache
+### ⚡ Comandos de Processamento Paralelo
 
-O cache pode ser configurado através do arquivo de configuração:
+```bash
+# Executar exemplo de processamento paralelo
+python examples/parallel_processing_example.py
+
+# Usar processamento paralelo em código Python
+from src.core.pipeline import create_pipeline
+
+# Criar pipeline com configurações personalizadas
+pipeline = create_pipeline(
+    max_workers=4,
+    resource_check_interval=5,
+    cache_enabled=True
+)
+
+# Processar itens em paralelo
+results = await pipeline.process_items_parallel(items)
+```
+
+### ⚙️ Configuração do Sistema
+
+O sistema pode ser configurado através do arquivo de configuração:
 
 ```yaml
 cache:
@@ -223,6 +265,17 @@ cache:
     downloads: 168  # 7 dias
     extractions: 72  # 3 dias
     conversions: 48  # 2 dias
+
+parallel_processing:
+  max_workers: 4
+  resource_check_interval: 5  # segundos
+  cpu_threshold: 80  # porcentagem
+  memory_threshold: 80  # porcentagem
+  disk_threshold: 90  # porcentagem
+  connection_pool:
+    max_connections: 10
+    timeout: 30  # segundos
+    retry_attempts: 3
 ```
 
 ## 📊 Dados CAGED
@@ -305,6 +358,7 @@ python main.py cache-clear --category downloads
 ```python
 from src.utils.cache import cache_manager
 from src.utils.validators import DataValidator
+from src.core.pipeline import create_pipeline
 
 # Usar o cache em código Python
 if cache_manager.get_cached_file("dados_2024_01"):
@@ -314,6 +368,12 @@ if cache_manager.get_cached_file("dados_2024_01"):
 validator = DataValidator()
 if validator.validate_disk_space("/path/to/data", required_gb=5):
     print("Espaço suficiente para processamento")
+
+# Usar processamento paralelo
+pipeline = create_pipeline(max_workers=8, cache_enabled=True)
+results = await pipeline.process_items_parallel(items)
+stats = pipeline.get_parallel_stats()
+print(f"Processados {stats['completed_tasks']} itens")
 ```
 
 ## 🎯 Status do Desenvolvimento
@@ -328,9 +388,9 @@ if validator.validate_disk_space("/path/to/data", required_gb=5):
 - [x] ✅ Sistema de logging refatorado
 - [x] ✅ Sistema de validação robusto (26+ testes)
 
-### ⚡ Fase 2: Pipeline Otimizado (Em Progresso)
+### ⚡ Fase 2: Pipeline Otimizado (Concluída)
 - [x] ✅ Sistema de cache inteligente (18 testes aprovados)
-- [ ] 🔄 Processamento paralelo
+- [x] ✅ Processamento paralelo (19 testes aprovados)
 - [ ] 🔄 Comando processar unificado
 - [ ] 🔄 Sistema de configuração YAML
 
@@ -344,6 +404,7 @@ if validator.validate_disk_space("/path/to/data", required_gb=5):
 ### 🧪 Qualidade e Testes
 - [x] ✅ Testes de cache (18 testes)
 - [x] ✅ Testes de validação (26 testes)
+- [x] ✅ Testes de processamento paralelo (19 testes)
 - [ ] 🔄 Testes de integração
 - [ ] 🔄 Cobertura de código 90%+
 - [ ] 🔄 Documentação técnica completa

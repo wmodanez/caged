@@ -16,9 +16,9 @@ import shutil
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Union, Any
 
-from ..utils.logger import setup_logger
+from utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 
@@ -322,6 +322,54 @@ class CacheManager:
             logger.info(f"Invalidados {removed_count} itens do cache")
             self._save_metadata()
     
+    def has_cached_item(self, key: str) -> bool:
+        """Verifica se existe item no cache."""
+        if key not in self.metadata:
+            return False
+        
+        metadata = self.metadata[key]
+        return metadata.is_valid()
+    
+    def get_cached_item(self, key: str) -> Optional[Any]:
+        """Recupera item do cache (para objetos Python)."""
+        # Para esta implementação, retornamos None pois focamos em arquivos
+        # Em uma implementação completa, poderíamos usar pickle ou json
+        return None
+    
+    def cache_item(self, key: str, item: Any, category: str = "default") -> bool:
+        """Cacheia item Python (implementação básica)."""
+        # Para esta implementação, apenas registramos que o item foi cacheado
+        # Em uma implementação completa, usaríamos pickle ou json
+        try:
+            import pickle
+            cache_file_path = self.cache_dir / f"{key}_{category}.pkl"
+            
+            with open(cache_file_path, 'wb') as f:
+                pickle.dump(item, f)
+            
+            # Criar metadados
+            file_size = cache_file_path.stat().st_size
+            created_at = datetime.now()
+            expires_at = created_at + timedelta(days=self.default_expiry_days)
+            
+            metadata = CacheMetadata(
+                file_path=cache_file_path,
+                checksum=self._calculate_checksum(cache_file_path),
+                created_at=created_at,
+                expires_at=expires_at,
+                file_size=file_size
+            )
+            
+            self.metadata[key] = metadata
+            self._save_metadata()
+            
+            logger.debug(f"Item cacheado: {key} -> {cache_file_path}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Erro ao cachear item {key}: {e}")
+            return False
+    
     def get_cache_stats(self) -> Dict:
         """Retorna estatísticas do cache."""
         total_items = len(self.metadata)
@@ -377,3 +425,7 @@ def clear_cache_manager():
     """Limpa instância global do cache manager."""
     global _cache_manager
     _cache_manager = None
+
+
+# Instância global para uso direto
+cache_manager = get_cache_manager()
