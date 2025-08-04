@@ -6,11 +6,15 @@ Módulo para descompactar arquivos .7z baixados do CAGED
 
 import re
 import hashlib
+import logging
+import json
+import time
 from pathlib import Path
 from typing import List, Optional, Dict, Tuple, Any
 from tqdm import tqdm
-from datetime import datetime
+from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections import defaultdict, deque
 
 # Importação das entidades
 from src.Entity.movimentacao import Movimentacao
@@ -18,6 +22,323 @@ from src.Entity.saldo_mensal import SaldoMensal
 from src.Entity.exclusao import Exclusao
 from src.Entity.movimentacao_fora_prazo import MovimentacaoForaPrazo
 from src.Entity.indicador import Indicador
+
+# Configuração de logging padrão
+logger = logging.getLogger("descompactador_caged")
+
+
+class MonitorDescompactacao:
+    """
+    Sistema de monitoramento para o descompactador CAGED
+    Implementa métricas de tempo, contadores de sucesso/falha e alertas
+    """
+    
+    def __init__(self, logger: logging.Logger, usar_emojis: bool = True):
+        """
+        Inicializa o sistema de monitoramento
+        
+        Args:
+            logger: Logger para registrar eventos
+            usar_emojis: Se deve usar emojis nas mensagens
+        """
+        self.logger = logger
+        self.usar_emojis = usar_emojis
+        
+        # Métricas de tempo
+        self.tempos_processamento = defaultdict(list)
+        self.inicio_operacao = None
+        self.fim_operacao = None
+        
+        # Contadores de sucesso/falha
+        self.contadores = {
+            'total_arquivos': 0,
+            'sucessos': 0,
+            'falhas': 0,
+            'bytes_processados': 0,
+            'arquivos_verificados': 0,
+            'arquivos_ignorados': 0,
+            'cache_hits': 0,
+            'cache_misses': 0
+        }
+        
+        # Histórico de performance (últimas 100 operações)
+        self.historico_performance = deque(maxlen=100)
+        
+        # Alertas e problemas
+        self.alertas = []
+        self.problemas_recorrentes = defaultdict(int)
+        
+        # Limites para alertas
+        self.limites = {
+            'taxa_falha_critica': 20.0,  # % de falhas
+            'tempo_operacao_lento': 300.0,  # segundos
+            'velocidade_minima': 0.5,  # arquivos/segundo
+            'problemas_recorrentes': 3  # número de ocorrências
+        }
+    
+    def iniciar_operacao(self, nome_operacao: str, total_itens: int = 0):
+        """
+        Inicia o monitoramento de uma operação
+        
+        Args:
+            nome_operacao: Nome da operação sendo monitorada
+            total_itens: Total de itens a serem processados
+        """
+        self.inicio_operacao = time.time()
+        self.operacao_atual = nome_operacao
+        self.contadores['total_arquivos'] = total_itens
+        
+        emoji = "🚀" if self.usar_emojis else ""
+        self.logger.info(f"{emoji} Iniciando monitoramento: {nome_operacao} ({total_itens} itens)")
+    
+    def finalizar_operacao(self):
+        """
+        Finaliza o monitoramento da operação atual
+        """
+        if self.inicio_operacao is None:
+            return
+        
+        self.fim_operacao = time.time()
+        tempo_total = self.fim_operacao - self.inicio_operacao
+        
+        # Registrar no histórico
+        self.historico_performance.append({
+            'operacao': self.operacao_atual,
+            'tempo_total': tempo_total,
+            'sucessos': self.contadores['sucessos'],
+            'falhas': self.contadores['falhas'],
+            'timestamp': datetime.now()
+        })
+        
+        # Verificar alertas
+        self._verificar_alertas(tempo_total)
+        
+        # Gerar relatório final
+        self._gerar_relatorio_final(tempo_total)
+    
+    def registrar_sucesso(self, tempo_processamento: float = 0, bytes_processados: int = 0):
+        """
+        Registra um sucesso na operação
+        
+        Args:
+            tempo_processamento: Tempo gasto no processamento
+            bytes_processados: Bytes processados
+        """
+        self.contadores['sucessos'] += 1
+        self.contadores['bytes_processados'] += bytes_processados
+        
+        if tempo_processamento > 0:
+            self.tempos_processamento[self.operacao_atual].append(tempo_processamento)
+    
+    def registrar_falha(self, erro: str, tipo_erro: str = "geral"):
+        """
+        Registra uma falha na operação
+        
+        Args:
+            erro: Descrição do erro
+            tipo_erro: Tipo/categoria do erro
+        """
+        self.contadores['falhas'] += 1
+        self.problemas_recorrentes[tipo_erro] += 1
+        
+        # Verificar se é um problema recorrente
+        if self.problemas_recorrentes[tipo_erro] >= self.limites['problemas_recorrentes']:
+            self._adicionar_alerta(
+                f"Problema recorrente detectado: {tipo_erro} ({self.problemas_recorrentes[tipo_erro]} ocorrências)",
+                "warning"
+            )
+    
+    def registrar_cache_hit(self):
+        """Registra um acerto no cache"""
+        self.contadores['cache_hits'] += 1
+    
+    def registrar_cache_miss(self):
+        """Registra uma falha no cache"""
+        self.contadores['cache_misses'] += 1
+    
+    def registrar_arquivo_ignorado(self):
+        """Registra um arquivo que foi ignorado (já processado)"""
+        self.contadores['arquivos_ignorados'] += 1
+    
+    def obter_metricas_tempo(self) -> Dict[str, float]:
+        """
+        Obtém métricas de tempo da operação atual
+        
+        Returns:
+            Dicionário com métricas de tempo
+        """
+        if not self.inicio_operacao:
+            return {}
+        
+        tempo_atual = time.time() - self.inicio_operacao
+        total_processados = self.contadores['sucessos'] + self.contadores['falhas']
+        
+        metricas = {
+            'tempo_decorrido': tempo_atual,
+            'velocidade_atual': total_processados / tempo_atual if tempo_atual > 0 else 0,
+            'eta_estimado': 0
+        }
+        
+        # Calcular ETA se houver progresso
+        if total_processados > 0 and self.contadores['total_arquivos'] > 0:
+            restantes = self.contadores['total_arquivos'] - total_processados
+            if restantes > 0 and metricas['velocidade_atual'] > 0:
+                metricas['eta_estimado'] = restantes / metricas['velocidade_atual']
+        
+        return metricas
+    
+    def obter_taxa_sucesso(self) -> float:
+        """
+        Calcula a taxa de sucesso atual
+        
+        Returns:
+            Taxa de sucesso em percentual
+        """
+        total = self.contadores['sucessos'] + self.contadores['falhas']
+        if total == 0:
+            return 100.0
+        return (self.contadores['sucessos'] / total) * 100
+    
+    def _verificar_alertas(self, tempo_total: float):
+        """
+        Verifica condições para gerar alertas
+        
+        Args:
+            tempo_total: Tempo total da operação
+        """
+        # Verificar taxa de falha
+        taxa_sucesso = self.obter_taxa_sucesso()
+        taxa_falha = 100 - taxa_sucesso
+        
+        if taxa_falha > self.limites['taxa_falha_critica']:
+            self._adicionar_alerta(
+                f"Taxa de falha crítica: {taxa_falha:.1f}% (limite: {self.limites['taxa_falha_critica']}%)",
+                "critical"
+            )
+        
+        # Verificar tempo de operação
+        if tempo_total > self.limites['tempo_operacao_lento']:
+            self._adicionar_alerta(
+                f"Operação lenta detectada: {tempo_total:.1f}s (limite: {self.limites['tempo_operacao_lento']}s)",
+                "warning"
+            )
+        
+        # Verificar velocidade
+        total_processados = self.contadores['sucessos'] + self.contadores['falhas']
+        velocidade = total_processados / tempo_total if tempo_total > 0 else 0
+        
+        if velocidade < self.limites['velocidade_minima'] and total_processados > 0:
+            self._adicionar_alerta(
+                f"Velocidade baixa: {velocidade:.2f} arq/s (mínimo: {self.limites['velocidade_minima']} arq/s)",
+                "warning"
+            )
+    
+    def _adicionar_alerta(self, mensagem: str, nivel: str):
+        """
+        Adiciona um alerta ao sistema
+        
+        Args:
+            mensagem: Mensagem do alerta
+            nivel: Nível do alerta (info, warning, critical)
+        """
+        alerta = {
+            'timestamp': datetime.now(),
+            'nivel': nivel,
+            'mensagem': mensagem,
+            'operacao': getattr(self, 'operacao_atual', 'desconhecida')
+        }
+        
+        self.alertas.append(alerta)
+        
+        # Log do alerta
+        emoji_map = {
+            'info': "ℹ️" if self.usar_emojis else "",
+            'warning': "⚠️" if self.usar_emojis else "",
+            'critical': "🚨" if self.usar_emojis else ""
+        }
+        
+        emoji = emoji_map.get(nivel, "")
+        log_method = getattr(self.logger, nivel if nivel != 'critical' else 'error')
+        log_method(f"{emoji} ALERTA: {mensagem}")
+    
+    def _gerar_relatorio_final(self, tempo_total: float):
+        """
+        Gera relatório final da operação
+        
+        Args:
+            tempo_total: Tempo total da operação
+        """
+        total_processados = self.contadores['sucessos'] + self.contadores['falhas']
+        taxa_sucesso = self.obter_taxa_sucesso()
+        velocidade = total_processados / tempo_total if tempo_total > 0 else 0
+        
+        emoji = "📊" if self.usar_emojis else ""
+        self.logger.info(f"{emoji} === RELATÓRIO DE MONITORAMENTO ===")
+        
+        # Estatísticas básicas
+        emoji_stats = "📈" if self.usar_emojis else ""
+        self.logger.info(f"{emoji_stats} Operação: {self.operacao_atual}")
+        self.logger.info(f"{emoji_stats} Tempo total: {tempo_total:.2f}s")
+        self.logger.info(f"{emoji_stats} Sucessos: {self.contadores['sucessos']}")
+        self.logger.info(f"{emoji_stats} Falhas: {self.contadores['falhas']}")
+        self.logger.info(f"{emoji_stats} Taxa de sucesso: {taxa_sucesso:.1f}%")
+        self.logger.info(f"{emoji_stats} Velocidade: {velocidade:.2f} arquivos/s")
+        
+        # Estatísticas de cache
+        total_cache = self.contadores['cache_hits'] + self.contadores['cache_misses']
+        if total_cache > 0:
+            taxa_cache = (self.contadores['cache_hits'] / total_cache) * 100
+            emoji_cache = "💾" if self.usar_emojis else ""
+            self.logger.info(f"{emoji_cache} Cache hits: {self.contadores['cache_hits']} ({taxa_cache:.1f}%)")
+        
+        # Bytes processados
+        if self.contadores['bytes_processados'] > 0:
+            mb_processados = self.contadores['bytes_processados'] / (1024 * 1024)
+            mb_por_segundo = mb_processados / tempo_total if tempo_total > 0 else 0
+            emoji_bytes = "💽" if self.usar_emojis else ""
+            self.logger.info(f"{emoji_bytes} Dados: {mb_processados:.1f} MB ({mb_por_segundo:.1f} MB/s)")
+        
+        # Alertas
+        if self.alertas:
+            emoji_alert = "🚨" if self.usar_emojis else ""
+            self.logger.info(f"{emoji_alert} Alertas gerados: {len(self.alertas)}")
+            for alerta in self.alertas[-3:]:  # Mostrar últimos 3 alertas
+                self.logger.info(f"  - {alerta['nivel'].upper()}: {alerta['mensagem']}")
+        
+        self.logger.info("=" * 50)
+    
+    def obter_estatisticas_historico(self) -> Dict[str, Any]:
+        """
+        Obtém estatísticas do histórico de operações
+        
+        Returns:
+            Dicionário com estatísticas históricas
+        """
+        if not self.historico_performance:
+            return {}
+        
+        tempos = [op['tempo_total'] for op in self.historico_performance]
+        sucessos = [op['sucessos'] for op in self.historico_performance]
+        falhas = [op['falhas'] for op in self.historico_performance]
+        
+        return {
+            'total_operacoes': len(self.historico_performance),
+            'tempo_medio': sum(tempos) / len(tempos),
+            'tempo_minimo': min(tempos),
+            'tempo_maximo': max(tempos),
+            'media_sucessos': sum(sucessos) / len(sucessos),
+            'media_falhas': sum(falhas) / len(falhas),
+            'ultima_operacao': self.historico_performance[-1]['timestamp']
+        }
+    
+    def limpar_historico(self):
+        """Limpa o histórico de performance"""
+        self.historico_performance.clear()
+        self.alertas.clear()
+        self.problemas_recorrentes.clear()
+        
+        emoji = "🧹" if self.usar_emojis else ""
+        self.logger.info(f"{emoji} Histórico de monitoramento limpo")
 
 
 class DescompactadorCaged:
@@ -28,7 +349,9 @@ class DescompactadorCaged:
     def __init__(self, 
                  diretorio_origem: str = "files-zip",
                  diretorio_destino: str = "files-unzip",
-                 max_workers: int = 4):
+                 max_workers: int = 4,
+                 usar_emojis: bool = True,
+                 nivel_log: str = "INFO"):
         """
         Inicializa o descompactador
         
@@ -36,11 +359,14 @@ class DescompactadorCaged:
             diretorio_origem: Diretório com arquivos .7z
             diretorio_destino: Diretório para arquivos descompactados
             max_workers: Número máximo de workers para processamento paralelo
+            usar_emojis: Se deve usar emojis nas mensagens de log (padrão: True)
+            nivel_log: Nível de log (DEBUG, INFO, WARNING, ERROR, CRITICAL)
         """
         self.diretorio_origem = Path(diretorio_origem)
         self.diretorio_destino = Path(diretorio_destino)
         self.max_workers = max_workers
         self.metadados_arquivos: Dict[str, Dict] = {}
+        self.usar_emojis = usar_emojis
         
         # Cache de metadados persistente
         self.cache_metadados = {}
@@ -49,11 +375,128 @@ class DescompactadorCaged:
         # Criar diretório de destino se não existir
         self.diretorio_destino.mkdir(parents=True, exist_ok=True)
         
-        from loguru import logger
-        self.logger = logger
+        # Configurar logger padrão
+        self.logger = self._configurar_logger(nivel_log)
+        
+        # Inicializar sistema de monitoramento
+        self.monitor = MonitorDescompactacao(self.logger, usar_emojis)
         
         # Carregar cache de metadados
         self._carregar_cache_metadados()
+    
+    def _configurar_logger(self, nivel_log: str) -> logging.Logger:
+        """
+        Configura o logger padrão com formatação estruturada
+        
+        Args:
+            nivel_log: Nível de log (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+            
+        Returns:
+            Logger configurado
+        """
+        logger_instance = logging.getLogger("descompactador_caged")
+        
+        # Evitar duplicação de handlers
+        if logger_instance.handlers:
+            return logger_instance
+        
+        # Configurar nível
+        logger_instance.setLevel(getattr(logging, nivel_log.upper(), logging.INFO))
+        
+        # Criar formatter estruturado
+        formatter = logging.Formatter(
+            '%(asctime)s | %(name)s | %(levelname)s | %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+        
+        # Handler para console
+        console_handler = logging.StreamHandler()
+        console_handler.setFormatter(formatter)
+        logger_instance.addHandler(console_handler)
+        
+        # Handler para arquivo (opcional)
+        try:
+            log_dir = Path("logs")
+            log_dir.mkdir(exist_ok=True)
+            
+            file_handler = logging.FileHandler(
+                log_dir / f"descompactador_caged_{datetime.now().strftime('%Y%m%d')}.log",
+                encoding='utf-8'
+            )
+            file_handler.setFormatter(formatter)
+            logger_instance.addHandler(file_handler)
+        except Exception:
+            # Se não conseguir criar arquivo de log, continua apenas com console
+            pass
+        
+        return logger_instance
+    
+    def _log_info(self, mensagem: str, emoji: str = "ℹ️"):
+        """Log de informação com emoji opcional"""
+        if self.usar_emojis:
+            self.logger.info(f"{emoji} {mensagem}")
+        else:
+            self.logger.info(mensagem)
+    
+    def _log_warning(self, mensagem: str, emoji: str = "⚠️"):
+        """Log de aviso com emoji opcional"""
+        if self.usar_emojis:
+            self.logger.warning(f"{emoji} {mensagem}")
+        else:
+            self.logger.warning(mensagem)
+    
+    def _log_error(self, mensagem: str, emoji: str = "❌"):
+        """Log de erro com emoji opcional"""
+        if self.usar_emojis:
+            self.logger.error(f"{emoji} {mensagem}")
+        else:
+            self.logger.error(mensagem)
+    
+    def _log_success(self, mensagem: str, emoji: str = "✅"):
+        """Log de sucesso com emoji opcional"""
+        if self.usar_emojis:
+            self.logger.info(f"{emoji} {mensagem}")
+        else:
+            self.logger.info(mensagem)
+    
+    def _log_debug(self, mensagem: str, emoji: str = "🔍"):
+        """Log de debug com emoji opcional"""
+        if self.usar_emojis:
+            self.logger.debug(f"{emoji} {mensagem}")
+        else:
+            self.logger.debug(mensagem)
+    
+    def _log_estruturado(self, nivel: str, mensagem: str, dados_extras: Optional[Dict] = None):
+        """
+        Log estruturado para análise posterior
+        
+        Args:
+            nivel: Nível do log (info, warning, error, debug)
+            mensagem: Mensagem principal
+            dados_extras: Dados adicionais em formato estruturado
+        """
+        log_data = {
+            "timestamp": datetime.now().isoformat(),
+            "nivel": nivel,
+            "mensagem": mensagem,
+            "modulo": "descompactador_caged"
+        }
+        
+        if dados_extras:
+            log_data.update(dados_extras)
+        
+        # Log estruturado como JSON para análise
+        log_json = json.dumps(log_data, ensure_ascii=False, separators=(',', ':'))
+        
+        # Enviar para o logger apropriado
+        if nivel == "debug":
+            self.logger.debug(f"STRUCTURED: {log_json}")
+        elif nivel == "info":
+            self.logger.info(f"STRUCTURED: {log_json}")
+        elif nivel == "warning":
+            self.logger.warning(f"STRUCTURED: {log_json}")
+        elif nivel == "error":
+            self.logger.error(f"STRUCTURED: {log_json}")
         
     def descompactar_arquivo(self, arquivo_7z: Path, destino: Optional[Path] = None, estrutura_complexa: bool = False) -> Tuple[bool, Dict]:
         """
@@ -66,8 +509,12 @@ class DescompactadorCaged:
         Returns:
             Tuple[bool, Dict]: (Sucesso, Metadados do arquivo)
         """
+        # Iniciar monitoramento da operação
+        inicio_processamento = time.time()
+        
         if not arquivo_7z.exists():
-            self.logger.error(f"❌ Arquivo não encontrado: {arquivo_7z}")
+            self._log_error(f"Arquivo não encontrado: {arquivo_7z}")
+            self.monitor.registrar_falha(f"Arquivo não encontrado: {arquivo_7z}", "arquivo_nao_encontrado")
             return False, {}
         
         # Extrair metadados do nome do arquivo
@@ -80,7 +527,7 @@ class DescompactadorCaged:
         destino.mkdir(parents=True, exist_ok=True)
         
         try:
-            self.logger.info(f"📦 Descompactando: {arquivo_7z.name}")
+            self._log_info(f"Descompactando: {arquivo_7z.name}", "📦")
             import py7zr
             
             # Verificar informações do arquivo antes da descompactação
@@ -90,9 +537,16 @@ class DescompactadorCaged:
                 "hash_md5_zip": info_zip["hash_md5"]
             })
             
+            # Log estruturado para início da descompactação
+            self._log_estruturado("info", "Iniciando descompactação", {
+                "arquivo": arquivo_7z.name,
+                "tamanho_zip": info_zip["tamanho"],
+                "destino": str(destino)
+            })
+            
             with py7zr.SevenZipFile(arquivo_7z, mode='r') as archive:
                 arquivos_internos = archive.getnames()
-                self.logger.info(f"   📋 {len(arquivos_internos)} arquivos encontrados")
+                self._log_info(f"{len(arquivos_internos)} arquivos encontrados", "📋")
                 archive.extractall(path=destino)
                 metadados["arquivos_extraidos"] = arquivos_internos
                 metadados["data_descompactacao"] = datetime.now().isoformat()
@@ -103,10 +557,23 @@ class DescompactadorCaged:
             if info_descompactado["existe"] and info_descompactado["tamanho_total"] > 0:
                 metadados["arquivos_validados"] = len(info_descompactado["arquivos_txt"]) + len(info_descompactado["arquivos_csv"])
                 metadados["tamanho_total_descompactado"] = info_descompactado["tamanho_total"]
-                self.logger.info(f"✅ Descompactado e validado com sucesso em: {destino}")
-                self.logger.info(f"   📊 {metadados['arquivos_validados']} arquivos válidos, {metadados['tamanho_total_descompactado']} bytes")
+                self._log_success(f"Descompactado e validado com sucesso em: {destino}")
+                self._log_info(f"{metadados['arquivos_validados']} arquivos válidos, {metadados['tamanho_total_descompactado']} bytes", "📊")
+                
+                # Registrar sucesso no monitor
+                tempo_processamento = time.time() - inicio_processamento
+                self.monitor.registrar_sucesso(tempo_processamento, metadados['tamanho_total_descompactado'])
+                
+                # Log estruturado para sucesso
+                self._log_estruturado("info", "Descompactação concluída com sucesso", {
+                    "arquivo": arquivo_7z.name,
+                    "arquivos_validados": metadados['arquivos_validados'],
+                    "tamanho_total": metadados['tamanho_total_descompactado'],
+                    "tempo_processamento": tempo_processamento
+                })
             else:
-                self.logger.warning(f"⚠️  Descompactação concluída mas validação falhou para: {arquivo_7z.name}")
+                self._log_warning(f"Descompactação concluída mas validação falhou para: {arquivo_7z.name}")
+                self.monitor.registrar_falha(f"Validação falhou para: {arquivo_7z.name}", "validacao_falhou")
             
             self.metadados_arquivos[arquivo_7z.name] = metadados
             
@@ -116,7 +583,19 @@ class DescompactadorCaged:
             return True, metadados
             
         except Exception as e:
-            self.logger.error(f"❌ Erro ao descompactar {arquivo_7z.name}: {e}")
+            self._log_error(f"Erro ao descompactar {arquivo_7z.name}: {e}")
+            
+            # Registrar falha no monitor
+            self.monitor.registrar_falha(f"Erro ao descompactar {arquivo_7z.name}: {e}", "erro_descompactacao")
+            
+            # Log estruturado para erro
+            self._log_estruturado("error", "Falha na descompactação", {
+                "arquivo": arquivo_7z.name,
+                "erro": str(e),
+                "destino": str(destino),
+                "tempo_processamento": time.time() - inicio_processamento
+            })
+            
             # Tentar limpar arquivos parcialmente extraídos
             try:
                 if destino.exists():
@@ -148,24 +627,33 @@ class DescompactadorCaged:
         
         # Verificar se o diretório de origem existe
         if not diretorio_origem_mes.exists():
-            self.logger.error(f"❌ Diretório não encontrado: {diretorio_origem_mes}")
+            self._log_error(f"Diretório não encontrado: {diretorio_origem_mes}")
             return False, []
         
         # Encontrar arquivos .7z no diretório específico do mês
         arquivos_7z = list(diretorio_origem_mes.glob("*.7z"))
         
         if not arquivos_7z:
-            self.logger.error(f"❌ Nenhum arquivo .7z encontrado para {ano}/{mes:02d}")
+            self._log_error(f"Nenhum arquivo .7z encontrado para {ano}/{mes:02d}")
             return False, []
         
-        self.logger.info(f"🎯 Descompactando {len(arquivos_7z)} arquivos de {ano}/{mes:02d}")
+        self._log_info(f"Descompactando {len(arquivos_7z)} arquivos de {ano}/{mes:02d}", "🎯")
+        
+        # Log estruturado para início do processamento mensal
+        self._log_estruturado("info", "Iniciando processamento mensal", {
+            "ano": ano,
+            "mes": mes,
+            "total_arquivos": len(arquivos_7z),
+            "usar_paralelo": usar_paralelo,
+            "max_workers": max_workers or self.max_workers
+        })
         
         # Criar diretório de destino
         diretorio_destino_mes.mkdir(parents=True, exist_ok=True)
         
         # Se usar processamento paralelo e há muitos arquivos, usar método paralelo otimizado
         if usar_paralelo and len(arquivos_7z) > 3:
-            self.logger.info(f"🚀 Usando processamento paralelo para {len(arquivos_7z)} arquivos")
+            self._log_info(f"Usando processamento paralelo para {len(arquivos_7z)} arquivos", "🚀")
             
             # Usar filtro específico para o mês
             total, descompactados, falhas, metadados_lista = self.descompactar_arquivos_paralelo(
@@ -188,9 +676,19 @@ class DescompactadorCaged:
             
             # Processar dados dos arquivos descompactados se solicitado
             if sucessos > 0:
-                self.logger.info(f"🔄 Processando dados dos arquivos descompactados de {ano}/{mes:02d}...")
+                self._log_info(f"Processando dados dos arquivos descompactados de {ano}/{mes:02d}...", "🔄")
                 entidades_criadas = self._processar_dados_mes(ano, mes, metadados_mes)
-                self.logger.info(f"📊 {len(entidades_criadas)} entidades CAGED criadas para {ano}/{mes:02d}")
+                self._log_info(f"{len(entidades_criadas)} entidades CAGED criadas para {ano}/{mes:02d}", "📊")
+                
+                # Log estruturado para conclusão do processamento
+                self._log_estruturado("info", "Processamento mensal concluído", {
+                    "ano": ano,
+                    "mes": mes,
+                    "sucessos": sucessos,
+                    "total_arquivos": len(arquivos_7z),
+                    "entidades_criadas": len(entidades_criadas),
+                    "metodo": "paralelo" if usar_paralelo else "sequencial"
+                })
             
             return sucessos > 0, metadados_mes
         
@@ -335,13 +833,19 @@ class DescompactadorCaged:
         inicio_total = time.time()
         self.logger.info("🚀 Iniciando descompactação paralela de arquivos CAGED")
         
+        # Iniciar monitoramento da operação
+        self.monitor.iniciar_operacao("Descompactação Paralela", 0)  # Total será atualizado após listar arquivos
+        
         # Listar arquivos .7z com filtros
         arquivos_zip = self._listar_arquivos_zip_filtrados(ano, ano_inicio, ano_fim, uf, tipo_arquivo)
         
         if not arquivos_zip:
             self.logger.info("❌ Nenhum arquivo .7z encontrado para descompactar")
+            self.monitor.finalizar_operacao()
             return 0, 0, 0, []
         
+        # Atualizar total de arquivos no monitor
+        self.monitor.contadores['total_arquivos'] = len(arquivos_zip)
         self.logger.info(f"📋 Encontrados {len(arquivos_zip)} arquivos .7z para análise")
         
         # Verificar quais arquivos precisam ser descompactados EM PARALELO
@@ -397,10 +901,14 @@ class DescompactadorCaged:
         
         if not arquivos_para_descompactar:
             self.logger.info("🎉 Todos os arquivos já estão descompactados!")
+            # Registrar arquivos ignorados no monitor
+            for _ in arquivos_zip:
+                self.monitor.registrar_arquivo_ignorado()
             # Recuperar metadados dos arquivos já processados
             for arquivo in arquivos_zip:
                 metadados = self.metadados_arquivos.get(arquivo.name, self._extrair_metadados_nome(arquivo.name))
                 metadados_lista.append(metadados)
+            self.monitor.finalizar_operacao()
             return total, 0, 0, metadados_lista
         
         self.logger.info(f"🚀 Iniciando descompactação paralela de {len(arquivos_para_descompactar)} arquivos com {max_workers} workers")
@@ -510,6 +1018,9 @@ class DescompactadorCaged:
         if ano:
             self._criar_indicadores_ano(ano, metadados_lista)
         
+        # Finalizar monitoramento
+        self.monitor.finalizar_operacao()
+        
         return total, descompactados, falhas, metadados_lista
     
     def descompactar_todos(self, ano: Optional[int] = None) -> Tuple[bool, List[Dict]]:
@@ -523,12 +1034,17 @@ class DescompactadorCaged:
             Tuple[bool, List[Dict]]: (Sucesso, Lista de metadados)
         """
         import time
+        
+        # Iniciar monitoramento
+        self.monitor.iniciar_operacao()
+        
         # Encontrar arquivos
         padrao = f"*{ano}*.7z" if ano else "*.7z"
         arquivos_7z = list(self.diretorio_origem.rglob(padrao))
         
         if not arquivos_7z:
             self.logger.error(f"❌ Nenhum arquivo .7z encontrado" + (f" para {ano}" if ano else ""))
+            self.monitor.finalizar_operacao()
             return False, []
         
         self.logger.info(f"🎯 Descompactando {len(arquivos_7z)} arquivos" + (f" de {ano}" if ano else ""))
@@ -638,6 +1154,9 @@ class DescompactadorCaged:
         # Agrupar por competência e criar indicadores
         if ano:
             self._criar_indicadores_ano(ano, metadados_lista)
+        
+        # Finalizar monitoramento
+        self.monitor.finalizar_operacao()
         
         return sucessos > 0, metadados_lista
     
