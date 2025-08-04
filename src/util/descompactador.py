@@ -64,9 +64,8 @@ class DescompactadorCaged:
         metadados = self._extrair_metadados_nome(arquivo_7z.name)
         
         if destino is None:
-            # Criar subdiretório baseado no ano
-            ano = self._extrair_ano_do_nome(arquivo_7z.name)
-            destino = self.diretorio_destino / str(ano)
+            # Usar método inteligente para determinar destino
+            destino = self._destino_arquivo_unzip(arquivo_7z)
         
         destino.mkdir(parents=True, exist_ok=True)
         
@@ -262,9 +261,11 @@ class DescompactadorCaged:
                                       max_workers: Optional[int] = None, 
                                       ano: Optional[int] = None,
                                       ano_inicio: Optional[int] = None,
-                                      ano_fim: Optional[int] = None) -> Tuple[int, int, int, List[Dict]]:
+                                      ano_fim: Optional[int] = None,
+                                      uf: Optional[str] = None,
+                                      tipo_arquivo: Optional[str] = None) -> Tuple[int, int, int, List[Dict]]:
         """
-        Descompacta arquivos .7z de forma paralela, opcionalmente filtrados por ano.
+        Descompacta arquivos .7z de forma paralela, opcionalmente filtrados por ano, UF e tipo.
         Verifica se arquivos já foram descompactados para evitar reprocessamento.
         
         Args:
@@ -272,6 +273,8 @@ class DescompactadorCaged:
             ano: Ano específico para filtrar
             ano_inicio: Ano inicial da faixa
             ano_fim: Ano final da faixa
+            uf: UF específica para filtrar (ex: 'SP', 'RJ')
+            tipo_arquivo: Tipo de arquivo para filtrar ('movimentacao', 'exclusao', 'fora_prazo')
             
         Returns:
             Tupla com (total de arquivos, arquivos descompactados, falhas, metadados)
@@ -285,7 +288,7 @@ class DescompactadorCaged:
         self.logger.info("🚀 Iniciando descompactação paralela de arquivos CAGED")
         
         # Listar arquivos .7z com filtros
-        arquivos_zip = self._listar_arquivos_zip_filtrados(ano, ano_inicio, ano_fim)
+        arquivos_zip = self._listar_arquivos_zip_filtrados(ano, ano_inicio, ano_fim, uf, tipo_arquivo)
         
         if not arquivos_zip:
             self.logger.info("❌ Nenhum arquivo .7z encontrado para descompactar")
@@ -965,14 +968,18 @@ class DescompactadorCaged:
     def _listar_arquivos_zip_filtrados(self, 
                                       ano: Optional[int] = None,
                                       ano_inicio: Optional[int] = None,
-                                      ano_fim: Optional[int] = None) -> List[Path]:
+                                      ano_fim: Optional[int] = None,
+                                      uf: Optional[str] = None,
+                                      tipo_arquivo: Optional[str] = None) -> List[Path]:
         """
-        Lista arquivos .7z na pasta files-zip, opcionalmente filtrados por ano.
+        Lista arquivos .7z na pasta files-zip, opcionalmente filtrados por ano, UF e tipo.
         
         Args:
             ano: Ano específico para filtrar
             ano_inicio: Ano inicial da faixa
             ano_fim: Ano final da faixa
+            uf: UF específica para filtrar (ex: 'SP', 'RJ')
+            tipo_arquivo: Tipo de arquivo para filtrar ('movimentacao', 'exclusao', 'fora_prazo')
             
         Returns:
             Lista de caminhos dos arquivos .7z encontrados e filtrados
@@ -983,45 +990,266 @@ class DescompactadorCaged:
         if not arquivos_zip:
             return []
         
-        # Aplicar filtros de ano
+        arquivos_filtrados = []
+        
+        for arquivo in arquivos_zip:
+            # Extrair metadados do arquivo para aplicar filtros
+            metadados = self._extrair_metadados_nome(arquivo.name)
+            ano_arquivo = metadados.get('ano')
+            uf_arquivo = metadados.get('uf')
+            tipo_arquivo_atual = metadados.get('tipo')
+            
+            # Aplicar filtros de ano (garantir que ano_arquivo seja int)
+            if ano and ano_arquivo != ano:
+                continue
+            
+            if ano_inicio and ano_arquivo:
+                try:
+                    ano_int = int(ano_arquivo) if isinstance(ano_arquivo, str) else ano_arquivo
+                    if ano_int < ano_inicio:
+                        continue
+                except (ValueError, TypeError):
+                    continue
+                
+            if ano_fim and ano_arquivo:
+                try:
+                    ano_int = int(ano_arquivo) if isinstance(ano_arquivo, str) else ano_arquivo
+                    if ano_int > ano_fim:
+                        continue
+                except (ValueError, TypeError):
+                    continue
+            
+            # Aplicar filtro de UF
+            if uf and uf_arquivo and uf_arquivo.upper() != uf.upper():
+                continue
+            
+            # Aplicar filtro de tipo de arquivo
+            if tipo_arquivo and tipo_arquivo_atual != tipo_arquivo:
+                continue
+            
+            # Se passou por todos os filtros, adicionar à lista
+            arquivos_filtrados.append(arquivo)
+        
+        return arquivos_filtrados
+    
+    def listar_arquivos_zip_locais(self, 
+                                   ano: Optional[int] = None,
+                                   ano_inicio: Optional[int] = None,
+                                   ano_fim: Optional[int] = None,
+                                   uf: Optional[str] = None,
+                                   tipo_arquivo: Optional[str] = None,
+                                   mostrar_detalhes: bool = True) -> List[Dict]:
+        """
+        Lista arquivos .7z locais com filtros avançados e informações detalhadas.
+        
+        Args:
+            ano: Ano específico para filtrar
+            ano_inicio: Ano inicial da faixa
+            ano_fim: Ano final da faixa
+            uf: UF específica para filtrar (ex: 'SP', 'RJ')
+            tipo_arquivo: Tipo de arquivo para filtrar ('movimentacao', 'exclusao', 'fora_prazo')
+            mostrar_detalhes: Se deve mostrar detalhes dos arquivos encontrados
+            
+        Returns:
+            Lista de dicionários com informações dos arquivos encontrados
+        """
+        # Usar o método de filtros existente
+        arquivos_zip = self._listar_arquivos_zip_filtrados(ano, ano_inicio, ano_fim, uf, tipo_arquivo)
+        
+        if not arquivos_zip:
+            if mostrar_detalhes:
+                self.logger.info("❌ Nenhum arquivo .7z encontrado com os filtros especificados")
+            return []
+        
+        # Preparar informações detalhadas dos arquivos
+        arquivos_info = []
+        
+        for arquivo in arquivos_zip:
+            # Extrair metadados completos
+            metadados = self._extrair_metadados_nome(arquivo.name)
+            
+            # Verificar informações do arquivo
+            info_arquivo = self._verificar_arquivo_zip(arquivo)
+            
+            # Verificar se já foi descompactado
+            ja_descompactado = not self._arquivo_precisa_descompactar(arquivo)
+            
+            # Montar informações completas
+            arquivo_info = {
+                'caminho': arquivo,
+                'nome': arquivo.name,
+                'tamanho': info_arquivo['tamanho'],
+                'tamanho_mb': round(info_arquivo['tamanho'] / 1024 / 1024, 2),
+                'hash_md5': info_arquivo['hash_md5'],
+                'data_modificacao': info_arquivo['data_modificacao'],
+                'ano': metadados.get('ano'),
+                'mes': metadados.get('mes'),
+                'uf': metadados.get('uf'),
+                'tipo': metadados.get('tipo'),
+                'competencia': metadados.get('competencia'),
+                'ja_descompactado': ja_descompactado
+            }
+            
+            arquivos_info.append(arquivo_info)
+        
+        # Ordenar por ano, mês e UF (tratando valores None)
+        arquivos_info.sort(key=lambda x: (
+            x.get('ano') or 0, 
+            x.get('mes') or 0, 
+            x.get('uf') or ''
+        ))
+        
+        if mostrar_detalhes:
+            self._mostrar_detalhes_arquivos_locais(arquivos_info, ano, ano_inicio, ano_fim, uf, tipo_arquivo)
+        
+        return arquivos_info
+    
+    def _mostrar_detalhes_arquivos_locais(self, 
+                                         arquivos_info: List[Dict],
+                                         ano: Optional[int] = None,
+                                         ano_inicio: Optional[int] = None,
+                                         ano_fim: Optional[int] = None,
+                                         uf: Optional[str] = None,
+                                         tipo_arquivo: Optional[str] = None) -> None:
+        """
+        Mostra detalhes dos arquivos .7z locais encontrados.
+        
+        Args:
+            arquivos_info: Lista de informações dos arquivos
+            ano: Filtro de ano aplicado
+            ano_inicio: Filtro de ano inicial aplicado
+            ano_fim: Filtro de ano final aplicado
+            uf: Filtro de UF aplicado
+            tipo_arquivo: Filtro de tipo aplicado
+        """
+        from collections import defaultdict
+        
+        total_arquivos = len(arquivos_info)
+        total_tamanho_mb = sum(info['tamanho_mb'] for info in arquivos_info)
+        ja_descompactados = sum(1 for info in arquivos_info if info['ja_descompactado'])
+        
+        # Mostrar filtros aplicados
+        filtros_aplicados = []
         if ano:
-            # Filtrar por ano específico
-            arquivos_filtrados = []
-            for arquivo in arquivos_zip:
-                ano_arquivo = self._extrair_ano_do_nome(arquivo.name)
-                if ano_arquivo == ano:
-                    arquivos_filtrados.append(arquivo)
-            return arquivos_filtrados
+            filtros_aplicados.append(f"Ano: {ano}")
+        elif ano_inicio or ano_fim:
+            if ano_inicio and ano_fim:
+                filtros_aplicados.append(f"Anos: {ano_inicio}-{ano_fim}")
+            elif ano_inicio:
+                filtros_aplicados.append(f"Ano >= {ano_inicio}")
+            elif ano_fim:
+                filtros_aplicados.append(f"Ano <= {ano_fim}")
         
-        elif ano_inicio and ano_fim:
-            # Filtrar por faixa de anos
-            arquivos_filtrados = []
-            for arquivo in arquivos_zip:
-                ano_arquivo = self._extrair_ano_do_nome(arquivo.name)
-                if ano_inicio <= ano_arquivo <= ano_fim:
-                    arquivos_filtrados.append(arquivo)
-            return arquivos_filtrados
+        if uf:
+            filtros_aplicados.append(f"UF: {uf.upper()}")
         
-        elif ano_inicio:
-            # Filtrar por ano inicial (sem fim)
-            arquivos_filtrados = []
-            for arquivo in arquivos_zip:
-                ano_arquivo = self._extrair_ano_do_nome(arquivo.name)
-                if ano_arquivo >= ano_inicio:
-                    arquivos_filtrados.append(arquivo)
-            return arquivos_filtrados
+        if tipo_arquivo:
+            filtros_aplicados.append(f"Tipo: {tipo_arquivo}")
         
-        elif ano_fim:
-            # Filtrar por ano final (sem início)
-            arquivos_filtrados = []
-            for arquivo in arquivos_zip:
-                ano_arquivo = self._extrair_ano_do_nome(arquivo.name)
-                if ano_arquivo <= ano_fim:
-                    arquivos_filtrados.append(arquivo)
-            return arquivos_filtrados
+        self.logger.info(f"📋 Arquivos .7z encontrados: {total_arquivos}")
+        if filtros_aplicados:
+            self.logger.info(f"🔍 Filtros: {', '.join(filtros_aplicados)}")
         
-        # Sem filtros, retornar todos
-        return arquivos_zip
+        self.logger.info(f"📊 Tamanho total: {total_tamanho_mb:.1f} MB")
+        self.logger.info(f"✅ Já descompactados: {ja_descompactados}/{total_arquivos}")
+        
+        # Agrupar por ano
+        arquivos_por_ano = defaultdict(list)
+        for info in arquivos_info:
+            ano_arquivo = info.get('ano', 'Desconhecido')
+            arquivos_por_ano[str(ano_arquivo)].append(info)
+        
+        # Mostrar resumo por ano
+        if len(arquivos_por_ano) > 1:
+            self.logger.info("\n📅 Resumo por ano:")
+            for ano_key in sorted(arquivos_por_ano.keys()):
+                arquivos_ano = arquivos_por_ano[ano_key]
+                total_ano = len(arquivos_ano)
+                descompactados_ano = sum(1 for info in arquivos_ano if info['ja_descompactado'])
+                tamanho_ano = sum(info['tamanho_mb'] for info in arquivos_ano)
+                
+                self.logger.info(f"   {ano_key}: {total_ano} arquivo{'s' if total_ano > 1 else ''}, "
+                               f"{descompactados_ano} descompactado{'s' if descompactados_ano != 1 else ''}, "
+                               f"{tamanho_ano:.1f} MB")
+        
+        # Agrupar por UF se não houver filtro de UF específico
+        if not uf and total_arquivos > 0:
+            arquivos_por_uf = defaultdict(list)
+            for info in arquivos_info:
+                uf_arquivo = info.get('uf', 'Desconhecida')
+                arquivos_por_uf[uf_arquivo].append(info)
+            
+            if len(arquivos_por_uf) > 1:
+                self.logger.info("\n🗺️  Resumo por UF:")
+                # Filtrar None e ordenar
+                uf_keys = [k for k in arquivos_por_uf.keys() if k is not None]
+                for uf_key in sorted(uf_keys):
+                    arquivos_uf = arquivos_por_uf[uf_key]
+                    total_uf = len(arquivos_uf)
+                    descompactados_uf = sum(1 for info in arquivos_uf if info['ja_descompactado'])
+                    
+                    self.logger.info(f"   {uf_key}: {total_uf} arquivo{'s' if total_uf > 1 else ''}, "
+                                   f"{descompactados_uf} descompactado{'s' if descompactados_uf != 1 else ''}")
+        
+        # Agrupar por tipo se não houver filtro de tipo específico
+        if not tipo_arquivo and total_arquivos > 0:
+            arquivos_por_tipo = defaultdict(list)
+            for info in arquivos_info:
+                tipo_info = info.get('tipo', 'outros')
+                arquivos_por_tipo[tipo_info].append(info)
+            
+            if len(arquivos_por_tipo) > 1:
+                self.logger.info("\n📁 Resumo por tipo:")
+                # Filtrar None e ordenar
+                tipo_keys = [k for k in arquivos_por_tipo.keys() if k is not None]
+                for tipo_key in sorted(tipo_keys):
+                    arquivos_tipo = arquivos_por_tipo[tipo_key]
+                    total_tipo = len(arquivos_tipo)
+                    descompactados_tipo = sum(1 for info in arquivos_tipo if info['ja_descompactado'])
+                    
+                    self.logger.info(f"   {tipo_key}: {total_tipo} arquivo{'s' if total_tipo > 1 else ''}, "
+                                   f"{descompactados_tipo} descompactado{'s' if descompactados_tipo != 1 else ''}")
+    
+    def _destino_arquivo_unzip(self, arquivo_7z: Path) -> Path:
+        """
+        Determina o diretório de destino inteligente para descompactação.
+        Mantém estrutura hierárquica: files-unzip/ANO/MES/ ou files-unzip/ANO/
+        
+        Args:
+            arquivo_7z: Caminho do arquivo .7z
+            
+        Returns:
+            Path: Caminho do diretório de destino
+        """
+        # Extrair metadados do arquivo
+        metadados = self._extrair_metadados_nome(arquivo_7z.name)
+        ano = metadados.get('ano')
+        mes = metadados.get('mes')
+        
+        # Estrutura base: files-unzip/ANO/
+        if ano:
+            destino_base = self.diretorio_destino / str(ano)
+        else:
+            # Fallback: usar ano atual se não conseguir extrair
+            from datetime import datetime
+            ano_atual = datetime.now().year
+            destino_base = self.diretorio_destino / str(ano_atual)
+        
+        # Se temos mês, criar subdiretório: files-unzip/ANO/MES/
+        if mes:
+            # Formato: AAAAMM (ex: 202401)
+            try:
+                mes_int = int(mes) if isinstance(mes, str) else mes
+                competencia = f"{ano}{mes_int:02d}"
+                destino_final = destino_base / competencia
+            except (ValueError, TypeError):
+                # Se não conseguir converter mês, usar apenas o ano
+                destino_final = destino_base
+        else:
+            # Sem mês específico, usar apenas o ano
+            destino_final = destino_base
+        
+        return destino_final
     
     def _criar_barra_progresso_avancada(self, 
                                        iterable, 
