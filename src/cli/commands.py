@@ -153,6 +153,9 @@ def processar(ctx, ano, mes, ano_inicio, mes_inicio, ano_fim, mes_fim, todos_mes
             skip_download, skip_extract, skip_convert
         )
         
+        # Definir variáveis para uso posterior
+        use_cache = config.cache.enabled if use_cache is None else use_cache
+        
         click.echo("📋 Etapas planejadas:")
         for stage in ProcessingStage:
             if stage in stages:
@@ -180,10 +183,27 @@ def processar(ctx, ano, mes, ano_inicio, mes_inicio, ano_fim, mes_fim, todos_mes
         # Executar validações centralizadas
         _execute_validations(items, stages, config, logger)
         
+        # Mostrar estimativa de tempo
+        estimated_time = _estimate_processing_time(items, stages, config)
+        click.echo(f"\n⏱️ Tempo estimado: {estimated_time}")
+        
         if dry_run:
             click.echo("\n🔍 MODO DRY-RUN - Apenas validação")
             click.echo("✅ Todas as validações passaram!")
-            click.echo("💡 Execute sem --dry-run para processar os dados")
+            
+            # Mostrar detalhes do que seria processado
+            click.echo(f"\n📋 RESUMO DO QUE SERIA PROCESSADO:")
+            click.echo(f"   📅 Período: {items[0].id} a {items[-1].id}")
+            click.echo(f"   📊 Total de itens: {len(items)}")
+            click.echo(f"   ⚙️ Etapas: {', '.join([_get_stage_name(s) for s in stages])}")
+            click.echo(f"   ⏱️ Tempo estimado: {estimated_time}")
+            
+            if use_cache:
+                click.echo(f"   💾 Cache: Habilitado")
+            if workers and workers > 1:
+                click.echo(f"   ⚡ Workers: {workers} (paralelo)")
+            
+            click.echo("\n💡 Execute sem --dry-run para processar os dados")
             return
         
         # Criar e executar pipeline
@@ -195,14 +215,72 @@ def processar(ctx, ano, mes, ano_inicio, mes_inicio, ano_fim, mes_fim, todos_mes
         # Executar processamento
         click.echo(f"\n🚀 Iniciando processamento de {len(items)} item(s)...")
         
-        # Por enquanto, apenas simular o processamento
-        click.echo("⚠️ Pipeline em desenvolvimento - simulando processamento...")
-        
-        for i, item in enumerate(items, 1):
-            click.echo(f"📊 Processando {i}/{len(items)}: {item.id}")
-            # Aqui seria executado: results = await pipeline.process_items([item])
-        
-        click.echo("\n✅ Processamento concluído com sucesso!")
+        # Executar pipeline real
+        try:
+            # Configurar callbacks de progresso
+            progress_bar = None
+            
+            def progress_callback(item, stage, progress):
+                nonlocal progress_bar
+                if progress_bar is None:
+                    progress_bar = click.progressbar(length=100, label='Processando')
+                    progress_bar.__enter__()
+                
+                # Atualizar barra de progresso
+                current_progress = int(progress * 100)
+                progress_bar.update(current_progress - progress_bar.pos)
+                
+                # Log detalhado se debug
+                if ctx.obj['debug']:
+                    stage_name = stage.value if stage else "geral"
+                    click.echo(f"\n🔄 {item.id} - {stage_name}: {progress:.1%}")
+            
+            def error_callback(item, error):
+                click.echo(f"\n❌ Erro em {item.id}: {error}", err=True)
+            
+            # Configurar pipeline com callbacks
+            pipeline.set_progress_callback(progress_callback)
+            pipeline.set_error_callback(error_callback)
+            
+            # Executar processamento
+            import asyncio
+            
+            # Determinar se usar processamento paralelo
+            use_parallel = (
+                config.processing.enable_parallel and 
+                len(items) > 1 and 
+                workers and workers > 1
+            )
+            
+            if use_parallel:
+                from src.core.pipeline import create_parallel_pipeline
+                parallel_pipeline = create_parallel_pipeline(config)
+                parallel_pipeline.set_progress_callback(progress_callback)
+                parallel_pipeline.set_error_callback(error_callback)
+                
+                click.echo(f"⚡ Usando processamento paralelo ({workers} workers)")
+                results = asyncio.run(
+                    parallel_pipeline.process_items_parallel(
+                        items, 
+                        enable_throttling=True
+                    )
+                )
+            else:
+                click.echo("🔄 Usando processamento sequencial")
+                results = asyncio.run(pipeline.process_items(items, parallel=False))
+            
+            # Fechar barra de progresso
+            if progress_bar:
+                progress_bar.__exit__(None, None, None)
+                click.echo()  # Nova linha
+            
+            # Exibir resultados
+            _display_processing_results(results, logger)
+            
+        except Exception as e:
+            if progress_bar:
+                progress_bar.__exit__(None, None, None)
+            raise
         
     except CAGEDException as e:
         logger.error(f"Erro CAGED: {e}")
@@ -383,6 +461,137 @@ def _get_stage_name(stage: ProcessingStage) -> str:
         ProcessingStage.CLEANUP: "Cleanup"
     }
     return names.get(stage, stage.value.title())
+
+
+def _display_processing_results(results, logger):
+    """Exibe resultados detalhados do processamento"""
+    if not results:
+        click.echo("⚠️ Nenhum resultado para exibir")
+        return
+    
+    successful = [r for r in results if r.success]
+    failed = [r for r in results if not r.success]
+    
+    # Estatísticas gerais
+    total_duration = sum(r.duration for r in results)
+    total_files = sum(r.files_processed for r in results)
+    total_bytes = sum(r.bytes_processed for r in results)
+    
+    click.echo("\n" + "="*60)
+    click.echo("📊 RELATÓRIO DE PROCESSAMENTO")
+    click.echo("="*60)
+    
+    # Resumo geral
+    click.echo(f"\n📈 RESUMO GERAL:")
+    click.echo(f"   ✅ Sucessos: {len(successful)}/{len(results)}")
+    click.echo(f"   ❌ Falhas: {len(failed)}/{len(results)}")
+    click.echo(f"   📁 Arquivos processados: {total_files:,}")
+    click.echo(f"   💾 Dados processados: {_format_bytes(total_bytes)}")
+    click.echo(f"   ⏱️ Tempo total: {_format_duration(total_duration)}")
+    
+    if total_duration > 0 and total_files > 0:
+        throughput = total_files / total_duration
+        click.echo(f"   🚀 Throughput: {throughput:.2f} arquivos/s")
+    
+    # Detalhes dos sucessos
+    if successful:
+        click.echo(f"\n✅ PROCESSAMENTOS BEM-SUCEDIDOS ({len(successful)}):")
+        for result in successful:
+            duration_str = _format_duration(result.duration)
+            files_str = f"{result.files_processed} arquivos" if result.files_processed > 0 else "sem arquivos"
+            click.echo(f"   📋 {result.item.id}: {duration_str}, {files_str}")
+            
+            # Mostrar warnings se houver
+            if result.warnings:
+                for warning in result.warnings[:3]:  # Máximo 3 warnings
+                    click.echo(f"      ⚠️ {warning}")
+                if len(result.warnings) > 3:
+                    click.echo(f"      ... e mais {len(result.warnings) - 3} warnings")
+    
+    # Detalhes das falhas
+    if failed:
+        click.echo(f"\n❌ PROCESSAMENTOS COM FALHA ({len(failed)}):")
+        for result in failed:
+            duration_str = _format_duration(result.duration)
+            click.echo(f"   💥 {result.item.id}: {duration_str}")
+            
+            # Mostrar erros
+            for error in result.errors[:2]:  # Máximo 2 erros
+                click.echo(f"      🔴 {error}")
+            if len(result.errors) > 2:
+                click.echo(f"      ... e mais {len(result.errors) - 2} erros")
+    
+    # Taxa de sucesso
+    success_rate = (len(successful) / len(results)) * 100
+    if success_rate == 100:
+        click.echo(f"\n🎉 PROCESSAMENTO CONCLUÍDO COM 100% DE SUCESSO!")
+    elif success_rate >= 80:
+        click.echo(f"\n✅ Processamento concluído com {success_rate:.1f}% de sucesso")
+    elif success_rate >= 50:
+        click.echo(f"\n⚠️ Processamento concluído com {success_rate:.1f}% de sucesso")
+    else:
+        click.echo(f"\n❌ Processamento com baixa taxa de sucesso: {success_rate:.1f}%")
+    
+    click.echo("="*60)
+
+
+def _format_bytes(bytes_count: int) -> str:
+    """Formata bytes em formato legível"""
+    if bytes_count == 0:
+        return "0 B"
+    
+    units = ['B', 'KB', 'MB', 'GB', 'TB']
+    size = bytes_count
+    unit_index = 0
+    
+    while size >= 1024 and unit_index < len(units) - 1:
+        size /= 1024
+        unit_index += 1
+    
+    return f"{size:.1f} {units[unit_index]}"
+
+
+def _format_duration(seconds: float) -> str:
+    """Formata duração em formato legível"""
+    if seconds < 1:
+        return f"{seconds*1000:.0f}ms"
+    elif seconds < 60:
+        return f"{seconds:.1f}s"
+    elif seconds < 3600:
+        minutes = int(seconds // 60)
+        secs = seconds % 60
+        return f"{minutes}m {secs:.0f}s"
+    else:
+        hours = int(seconds // 3600)
+        minutes = int((seconds % 3600) // 60)
+        return f"{hours}h {minutes}m"
+
+
+def _estimate_processing_time(items, stages, config) -> str:
+    """Estima tempo de processamento baseado em histórico"""
+    # Estimativas baseadas em experiência (podem ser refinadas com dados reais)
+    base_times = {
+        ProcessingStage.DOWNLOAD: 30,  # 30s por arquivo
+        ProcessingStage.EXTRACT: 15,   # 15s por arquivo
+        ProcessingStage.CONVERT: 45,   # 45s por arquivo
+        ProcessingStage.VALIDATE: 5,   # 5s por arquivo
+        ProcessingStage.CLEANUP: 2     # 2s por arquivo
+    }
+    
+    total_estimated_seconds = 0
+    
+    for item in items:
+        for stage in item.stages:
+            base_time = base_times.get(stage, 20)  # 20s padrão
+            total_estimated_seconds += base_time
+    
+    # Ajustar para processamento paralelo
+    if config.processing.enable_parallel and len(items) > 1:
+        workers = config.processing.max_workers
+        parallel_factor = min(workers, len(items)) / len(items)
+        total_estimated_seconds *= (1 - parallel_factor * 0.7)  # 70% de eficiência paralela
+    
+    return _format_duration(total_estimated_seconds)
 
 
 if __name__ == '__main__':

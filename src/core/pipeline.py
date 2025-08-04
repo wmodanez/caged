@@ -793,10 +793,28 @@ class ParallelPipeline(CAGEDPipeline):
 
 # Funções utilitárias para criar pipelines
 def create_pipeline(config: Optional[CAGEDConfig] = None) -> CAGEDPipeline:
-    """Cria instância do pipeline básico"""
-    return CAGEDPipeline(config)
+    """Cria instância do pipeline básico com handlers registrados"""
+    pipeline = CAGEDPipeline(config)
+    
+    # Registrar handlers de estágio
+    from src.core.stage_handlers import create_stage_handlers
+    handlers = create_stage_handlers(pipeline.config)
+    
+    for stage, handler in handlers.items():
+        pipeline.register_stage_handler(stage, handler)
+    
+    return pipeline
 
 
 def create_parallel_pipeline(config: Optional[CAGEDConfig] = None) -> ParallelPipeline:
-    """Cria instância do pipeline paralelo avançado"""
-    return ParallelPipeline(config)
+    """Cria instância do pipeline paralelo avançado com handlers registrados"""
+    pipeline = ParallelPipeline(config)
+    
+    # Registrar handlers de estágio
+    from src.core.stage_handlers import create_stage_handlers
+    handlers = create_stage_handlers(pipeline.config)
+    
+    for stage, handler in handlers.items():
+        pipeline.register_stage_handler(stage, handler)
+    
+    return pipeline
