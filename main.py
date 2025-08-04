@@ -5,15 +5,60 @@ Script principal para download, processamento e consolidação de dados mensais
 """
 
 import click
+import logging
 from pathlib import Path
-from loguru import logger
+from datetime import datetime
 from src.util.gerenciador_ftp import GerenciadorArquivosCaged
 from src.util.conversor_parquet import ConversorParquetCaged
 from src.util.descompactador import DescompactadorCaged
 
 
-# Configuração de logging
-logger.add("logs/caged_{time}.log", rotation="1 day", retention="30 days")
+# Configuração de logging padrão
+def configurar_logging(nivel: str = "WARNING", usar_emojis: bool = True):
+    """
+    Configura o sistema de logging padrão para o CAGED
+    
+    Args:
+        nivel: Nível de log (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+        usar_emojis: Se deve usar emojis nas mensagens
+    """
+    # Criar diretório de logs
+    log_dir = Path("logs")
+    log_dir.mkdir(exist_ok=True)
+    
+    # Configurar logger principal
+    logger = logging.getLogger("caged_main")
+    logger.setLevel(getattr(logging, nivel.upper(), logging.WARNING))
+    
+    # Evitar duplicação de handlers
+    if logger.handlers:
+        return logger
+    
+    # Formatter para logs
+    formatter = logging.Formatter(
+        '%(asctime)s | %(name)s | %(levelname)s | %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    
+    # Handler para arquivo
+    file_handler = logging.FileHandler(
+        log_dir / f"caged_{datetime.now().strftime('%Y%m%d')}.log",
+        encoding='utf-8'
+    )
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+    
+    # Handler para console (apenas para níveis debug e info)
+    if nivel.upper() in ['DEBUG', 'INFO']:
+        console_handler = logging.StreamHandler()
+        console_handler.setFormatter(formatter)
+        logger.addHandler(console_handler)
+    
+    return logger
+
+
+# Logger global
+logger = configurar_logging()
 
 
 @click.group()
@@ -41,30 +86,31 @@ def cli(ctx, log_level):
     # Configurar nível de log baseado no parâmetro
     ctx.ensure_object(dict)
     
-    # Mapear níveis de log para o formato do loguru
+    # Mapear níveis de log
     log_level_map = {
         'debug': 'DEBUG',
         'info': 'INFO', 
         'warn': 'WARNING'
     }
     
-    loguru_level = log_level_map[log_level.lower()]
-    ctx.obj['log_level'] = loguru_level
+    nivel_log = log_level_map[log_level.lower()]
+    ctx.obj['log_level'] = nivel_log
     
-    # Remover handlers existentes e configurar novo nível
-    logger.remove()
+    # Reconfigurar logger com novo nível
+    global logger
+    logger = configurar_logging(nivel_log, usar_emojis=True)
     
-    # Configurar log para arquivo com o nível especificado
-    logger.add("logs/caged_{time}.log", 
-               rotation="1 day", 
-               retention="30 days", 
-               level=loguru_level)
-    
-    # Configurar log para console apenas se for debug ou info
+    # Configurar logging para console se necessário
     if log_level.lower() in ['debug', 'info']:
-        logger.add(lambda msg: click.echo(f"🔍 {msg}", err=True), 
-                   level=loguru_level,
-                   format="{time:HH:mm:ss} | {level} | {message}")
+        def log_to_console(msg):
+            emoji = "🔍" if log_level.lower() == 'debug' else "ℹ️"
+            click.echo(f"{emoji} {msg}", err=True)
+        
+        # Adicionar handler customizado para console
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(getattr(logging, nivel_log))
+        console_handler.addFilter(lambda record: log_to_console(record.getMessage()) or False)
+        logger.addHandler(console_handler)
 
 
 @cli.command()
@@ -102,7 +148,7 @@ def baixar(ano, mes, mes_inicio, mes_fim, ano_inicio, mes_inicio_faixa, ano_fim,
     # Baixar faixa de datas: julho/2021 até março/2023
     python main.py baixar --ano-inicio 2021 --mes-inicio-faixa 7 --ano-fim 2023 --mes-fim-faixa 3
     """
-    logger.info(f"Iniciando download - Configurações: Ano: {ano}, Mês: {mes}, Faixa: {ano_inicio}/{mes_inicio_faixa} até {ano_fim}/{mes_fim_faixa}, Todos anos: {todos_anos}, Todos meses: {todos_meses}")
+    logger.info(f"🚀 Iniciando download - Configurações: Ano: {ano}, Mês: {mes}, Faixa: {ano_inicio}/{mes_inicio_faixa} até {ano_fim}/{mes_fim_faixa}, Todos anos: {todos_anos}, Todos meses: {todos_meses}")
     
     gerenciador = GerenciadorArquivosCaged()
     gerenciador.conectar()
@@ -197,7 +243,7 @@ def baixar(ano, mes, mes_inicio, mes_fim, ano_inicio, mes_inicio_faixa, ano_fim,
         click.echo(f"✅ Download completado! {total_downloads} operações realizadas")
         
     except Exception as e:
-        logger.error(f"Erro durante o download: {e}")
+        logger.error(f"❌ Erro durante o download: {e}")
         click.echo(f"❌ Erro: {e}")
     finally:
         gerenciador.desconectar()
