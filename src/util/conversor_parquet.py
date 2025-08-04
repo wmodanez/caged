@@ -17,7 +17,10 @@ from typing import Dict, List, Optional, Tuple, Any
 
 # Imports de terceiros
 import polars as pl
-from loguru import logger
+import logging
+
+# Usar o logger centralizado configurado no main.py
+logger = logging.getLogger("caged")
 
 # Imports locais - Entidades
 from src.Entity.movimentacao import Movimentacao
@@ -267,20 +270,8 @@ CONFIG_FILTROS = {
     }
 }
 
-# Configurações de logging estruturado
-logger.remove()  # Remove handler padrão
-logger.add(
-    "logs/conversor_caged_{time:YYYY-MM-DD}.log",
-    rotation="1 day",
-    retention="30 days",
-    level="INFO",
-    format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {name}:{function}:{line} | {message}"
-)
-logger.add(
-    lambda msg: print(msg, end=""),
-    level="INFO",
-    format="{time:HH:mm:ss} | {level} | {message}"
-)
+# Configurações de logging já foram definidas pelo sistema centralizado
+# Não é necessário configurar novamente aqui
 
 
 class ConversorParquetCaged:

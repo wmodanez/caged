@@ -5,7 +5,12 @@ from typing import List, Dict, Any
 import logging
 from contextlib import contextmanager
 
-logger = logging.getLogger("utilitarios_caged")
+# Importação do sistema de logging centralizado
+from src.util.logger_config import LoggerConfig, setup_logger, log_structured
+import logging
+
+# Usar o logger centralizado configurado no main.py
+logger = logging.getLogger("caged")
 
 
 def formatar_tempo(segundos: float) -> str:

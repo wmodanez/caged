@@ -22,53 +22,41 @@ from datetime import datetime
 from src.util.gerenciador_ftp import GerenciadorArquivosCaged
 from src.util.conversor_parquet import ConversorParquetCaged
 from src.util.descompactador import DescompactadorCaged
+from src.util.logger_config import LoggerConfig, setup_logger, log_structured
+from src.util.utilitarios import MedidorTempo
 
 
 # ============================================================================
 # CONFIGURAÇÃO DE LOGGING CENTRALIZADA
 # ============================================================================
 
-def configurar_logging(nivel: str = "WARNING", usar_emojis: bool = True):
+def configurar_logging(nivel: str = "WARNING", usar_emojis: bool = True, enable_json: bool = False):
     """
     Configura o sistema de logging centralizado para o CAGED
     
     Args:
         nivel: Nível de log (DEBUG, INFO, WARNING, ERROR, CRITICAL)
         usar_emojis: Se deve usar emojis nas mensagens
+        enable_json: Se deve habilitar logs estruturados em JSON
     """
-    # Criar diretório de logs
-    log_dir = Path("logs")
-    log_dir.mkdir(exist_ok=True)
+    # Configurar níveis específicos por módulo
+    module_levels = {
+        "ftp": nivel,
+        "descompactador": nivel,
+        "conversor": nivel,
+        "validador": nivel
+    }
     
-    # Configurar logger principal
-    logger = logging.getLogger("caged_main")
-    logger.setLevel(getattr(logging, nivel.upper(), logging.WARNING))
-    
-    # Evitar duplicação de handlers
-    if logger.handlers:
-        return logger
-    
-    # Formatter para logs
-    formatter = logging.Formatter(
-        '%(asctime)s | %(name)s | %(levelname)s | %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
+    # Usar o novo sistema de logging centralizado
+    return setup_logger(
+        name="caged",
+        level=nivel,
+        enable_file=True,
+        enable_console=True,
+        use_emojis=usar_emojis,
+        enable_json=enable_json,
+        module_levels=module_levels
     )
-    
-    # Handler para arquivo
-    file_handler = logging.FileHandler(
-        log_dir / f"caged_{datetime.now().strftime('%Y%m%d')}.log",
-        encoding='utf-8'
-    )
-    file_handler.setFormatter(formatter)
-    logger.addHandler(file_handler)
-    
-    # Handler para console (apenas para níveis debug e info)
-    if nivel.upper() in ['DEBUG', 'INFO']:
-        console_handler = logging.StreamHandler()
-        console_handler.setFormatter(formatter)
-        logger.addHandler(console_handler)
-    
-    return logger
 
 
 # ============================================================================
@@ -127,8 +115,8 @@ class ValidadorCaged:
             return False, f"Erro ao verificar espaço em disco: {e}"
 
 
-# Logger global
-logger = configurar_logging()
+# Logger global (será configurado na função cli)
+logger = None
 
 
 # ============================================================================
@@ -235,6 +223,10 @@ def processar(ano, mes, ano_inicio, mes_inicio, ano_fim, mes_fim, todos_meses,
     
     logger.info(f"🚀 Iniciando processamento unificado - Ano: {ano}, Mês: {mes}, Workers: {workers}, Cache: {use_cache}")
     
+    # Inicializar medidor de tempo
+    medidor = MedidorTempo("Processamento CAGED")
+    medidor.iniciar_processo()
+    
     # ========================================================================
     # VALIDAÇÕES CENTRALIZADAS
     # ========================================================================
@@ -324,18 +316,19 @@ def processar(ano, mes, ano_inicio, mes_inicio, ano_fim, mes_fim, todos_meses,
     conversor = None
     
     try:
-        if executar_download:
-            gerenciador = GerenciadorArquivosCaged()
-            gerenciador.conectar()
-            click.echo("🔗 Conexão FTP estabelecida")
-        
-        if executar_extract:
-            descompactador = DescompactadorCaged()
-            click.echo("📦 Descompactador inicializado")
-        
-        if executar_convert:
-            conversor = ConversorParquetCaged(habilitar_cache=use_cache)
-            click.echo(f"🔄 Conversor inicializado (Cache: {'✅' if use_cache else '❌'})")
+        with medidor.etapa("Inicialização de Componentes"):
+            if executar_download:
+                gerenciador = GerenciadorArquivosCaged()
+                gerenciador.conectar()
+                click.echo("🔗 Conexão FTP estabelecida")
+            
+            if executar_extract:
+                descompactador = DescompactadorCaged()
+                click.echo("📦 Descompactador inicializado")
+            
+            if executar_convert:
+                conversor = ConversorParquetCaged()
+                click.echo(f"🔄 Conversor inicializado (Cache: {'✅' if use_cache else '❌'})")
         
         # ====================================================================
         # PROCESSAMENTO PRINCIPAL
@@ -346,57 +339,63 @@ def processar(ano, mes, ano_inicio, mes_inicio, ano_fim, mes_fim, todos_meses,
         
         if modo_processamento == "mensal":
             # Processamento mensal
-            click.echo(f"\n🚀 Iniciando processamento de {mes:02d}/{ano}")
-            sucesso = _processar_mes(
-                ano, mes, gerenciador, descompactador, conversor,
-                executar_download, executar_extract, executar_convert,
-                campos, workers
-            )
-            total_processados = 1
-            if sucesso:
-                total_sucessos = 1
+            with medidor.etapa(f"Processamento Mensal {mes:02d}/{ano}"):
+                click.echo(f"\n🚀 Iniciando processamento de {mes:02d}/{ano}")
+                sucesso = _processar_mes(
+                    ano, mes, gerenciador, descompactador, conversor,
+                    executar_download, executar_extract, executar_convert,
+                    campos, workers, medidor
+                )
+                total_processados = 1
+                if sucesso:
+                    total_sucessos = 1
                 
         elif modo_processamento == "ano_completo":
             # Processamento de ano completo
-            click.echo(f"\n🚀 Iniciando processamento do ano {ano}")
-            for mes_atual in range(1, 13):
-                click.echo(f"\n📅 Processando {mes_atual:02d}/{ano}")
-                sucesso = _processar_mes(
-                    ano, mes_atual, gerenciador, descompactador, conversor,
-                    executar_download, executar_extract, executar_convert,
-                    campos, workers
-                )
-                total_processados += 1
-                if sucesso:
-                    total_sucessos += 1
+            with medidor.etapa(f"Processamento Anual {ano}"):
+                click.echo(f"\n🚀 Iniciando processamento do ano {ano}")
+                for mes_atual in range(1, 13):
+                    click.echo(f"\n📅 Processando {mes_atual:02d}/{ano}")
+                    sucesso = _processar_mes(
+                        ano, mes_atual, gerenciador, descompactador, conversor,
+                        executar_download, executar_extract, executar_convert,
+                        campos, workers, medidor
+                    )
+                    total_processados += 1
+                    if sucesso:
+                        total_sucessos += 1
                     
         elif modo_processamento == "faixa":
             # Processamento de faixa
-            click.echo(f"\n🚀 Iniciando processamento da faixa {mes_inicio:02d}/{ano_inicio} até {mes_fim:02d}/{ano_fim}")
-            
-            ano_atual = ano_inicio
-            mes_atual = mes_inicio
-            
-            while ano_atual < ano_fim or (ano_atual == ano_fim and mes_atual <= mes_fim):
-                click.echo(f"\n📅 Processando {mes_atual:02d}/{ano_atual}")
-                sucesso = _processar_mes(
-                    ano_atual, mes_atual, gerenciador, descompactador, conversor,
-                    executar_download, executar_extract, executar_convert,
-                    campos, workers
-                )
-                total_processados += 1
-                if sucesso:
-                    total_sucessos += 1
+            with medidor.etapa(f"Processamento Faixa {mes_inicio:02d}/{ano_inicio} - {mes_fim:02d}/{ano_fim}"):
+                click.echo(f"\n🚀 Iniciando processamento da faixa {mes_inicio:02d}/{ano_inicio} até {mes_fim:02d}/{ano_fim}")
                 
-                # Avançar para próximo mês
-                mes_atual += 1
-                if mes_atual > 12:
-                    mes_atual = 1
-                    ano_atual += 1
+                ano_atual = ano_inicio
+                mes_atual = mes_inicio
+                
+                while ano_atual < ano_fim or (ano_atual == ano_fim and mes_atual <= mes_fim):
+                    click.echo(f"\n📅 Processando {mes_atual:02d}/{ano_atual}")
+                    sucesso = _processar_mes(
+                        ano_atual, mes_atual, gerenciador, descompactador, conversor,
+                        executar_download, executar_extract, executar_convert,
+                        campos, workers, medidor
+                    )
+                    total_processados += 1
+                    if sucesso:
+                        total_sucessos += 1
+                    
+                    # Avançar para próximo mês
+                    mes_atual += 1
+                    if mes_atual > 12:
+                        mes_atual = 1
+                        ano_atual += 1
         
         # ====================================================================
         # RELATÓRIO FINAL
         # ====================================================================
+        
+        # Finalizar medição de tempo
+        medidor.finalizar_processo()
         
         click.echo("\n" + "="*50)
         click.echo("📊 RELATÓRIO FINAL")
@@ -405,6 +404,9 @@ def processar(ano, mes, ano_inicio, mes_inicio, ano_fim, mes_fim, todos_meses,
         click.echo(f"✅ Sucessos: {total_sucessos}")
         click.echo(f"❌ Falhas: {total_processados - total_sucessos}")
         click.echo(f"📊 Taxa de sucesso: {(total_sucessos/total_processados)*100:.1f}%")
+        
+        # Imprimir resumo de tempo
+        medidor.imprimir_resumo()
         
         if use_cache and conversor:
             estatisticas = conversor.exibir_estatisticas_cache()
@@ -431,7 +433,7 @@ def processar(ano, mes, ano_inicio, mes_inicio, ano_fim, mes_fim, todos_meses,
 
 def _processar_mes(ano: int, mes: int, gerenciador, descompactador, conversor,
                   executar_download: bool, executar_extract: bool, executar_convert: bool,
-                  campos: tuple, workers: int) -> bool:
+                  campos: tuple, workers: int, medidor=None) -> bool:
     """
     Processa um mês específico executando as etapas selecionadas
     
@@ -443,37 +445,71 @@ def _processar_mes(ano: int, mes: int, gerenciador, descompactador, conversor,
     try:
         # Etapa 1: Download
         if executar_download:
-            click.echo(f"   📥 Baixando dados...")
-            sucesso, metadados = gerenciador.baixar_dados_mensais(ano, mes)
-            if sucesso:
-                click.echo(f"   ✅ Download concluído")
+            if medidor:
+                with medidor.etapa(f"Download {mes:02d}/{ano}"):
+                    click.echo(f"   📥 Baixando dados...")
+                    sucesso, metadados = gerenciador.baixar_dados_mensais(ano, mes)
+                    if sucesso:
+                        click.echo(f"   ✅ Download concluído")
+                    else:
+                        click.echo(f"   ❌ Falha no download")
+                        sucesso_geral = False
             else:
-                click.echo(f"   ❌ Falha no download")
-                sucesso_geral = False
+                click.echo(f"   📥 Baixando dados...")
+                sucesso, metadados = gerenciador.baixar_dados_mensais(ano, mes)
+                if sucesso:
+                    click.echo(f"   ✅ Download concluído")
+                else:
+                    click.echo(f"   ❌ Falha no download")
+                    sucesso_geral = False
         
         # Etapa 2: Extração
         if executar_extract and sucesso_geral:
-            click.echo(f"   📦 Extraindo arquivos...")
-            sucesso = descompactador.descompactar_mensal(ano, mes)
-            if sucesso:
-                click.echo(f"   ✅ Extração concluída")
+            if medidor:
+                with medidor.etapa(f"Extração {mes:02d}/{ano}"):
+                    click.echo(f"   📦 Extraindo arquivos...")
+                    sucesso = descompactador.descompactar_mensal(ano, mes)
+                    if sucesso:
+                        click.echo(f"   ✅ Extração concluída")
+                    else:
+                        click.echo(f"   ❌ Falha na extração")
+                        sucesso_geral = False
             else:
-                click.echo(f"   ❌ Falha na extração")
-                sucesso_geral = False
+                click.echo(f"   📦 Extraindo arquivos...")
+                sucesso = descompactador.descompactar_mensal(ano, mes)
+                if sucesso:
+                    click.echo(f"   ✅ Extração concluída")
+                else:
+                    click.echo(f"   ❌ Falha na extração")
+                    sucesso_geral = False
         
         # Etapa 3: Conversão
         if executar_convert and sucesso_geral:
-            click.echo(f"   🔄 Convertendo para Parquet...")
-            sucesso, _, _, _ = conversor.converter_mensal(
-                ano, mes, 
-                campos_selecionados=list(campos) if campos else None,
-                usar_paralelismo=workers > 1
-            )
-            if sucesso:
-                click.echo(f"   ✅ Conversão concluída")
+            if medidor:
+                with medidor.etapa(f"Conversão {mes:02d}/{ano}"):
+                    click.echo(f"   🔄 Convertendo para Parquet...")
+                    sucesso, _, _, _ = conversor.converter_mensal(
+                        ano, mes, 
+                        campos_selecionados=list(campos) if campos else None,
+                        usar_paralelismo=workers > 1
+                    )
+                    if sucesso:
+                        click.echo(f"   ✅ Conversão concluída")
+                    else:
+                        click.echo(f"   ❌ Falha na conversão")
+                        sucesso_geral = False
             else:
-                click.echo(f"   ❌ Falha na conversão")
-                sucesso_geral = False
+                click.echo(f"   🔄 Convertendo para Parquet...")
+                sucesso, _, _, _ = conversor.converter_mensal(
+                    ano, mes, 
+                    campos_selecionados=list(campos) if campos else None,
+                    usar_paralelismo=workers > 1
+                )
+                if sucesso:
+                    click.echo(f"   ✅ Conversão concluída")
+                else:
+                    click.echo(f"   ❌ Falha na conversão")
+                    sucesso_geral = False
         
         return sucesso_geral
         

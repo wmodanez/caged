@@ -17,7 +17,8 @@ from typing import Set, Optional, Dict, Any, List, Union
 from datetime import datetime, date
 import re
 
-logger = logging.getLogger("filtro_caged")
+# Usar o logger centralizado configurado no main.py
+logger = logging.getLogger("caged")
 
 class FiltroCNAE:
     """

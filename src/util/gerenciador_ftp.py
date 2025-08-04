@@ -9,10 +9,15 @@ import os
 import re
 import time
 import functools
+import logging
 from pathlib import Path
 from typing import List, Optional, Dict, Tuple, Callable, Any
 from datetime import datetime
-from loguru import logger
+
+import logging
+
+# Usar o logger centralizado configurado no main.py
+logger = logging.getLogger("caged")
 
 # Importação das entidades
 from src.Entity.movimentacao import Movimentacao

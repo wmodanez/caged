@@ -23,8 +23,10 @@ from src.Entity.exclusao import Exclusao
 from src.Entity.movimentacao_fora_prazo import MovimentacaoForaPrazo
 from src.Entity.indicador import Indicador
 
-# Configuração de logging padrão
-logger = logging.getLogger("descompactador_caged")
+import logging
+
+# Usar o logger centralizado configurado no main.py
+logger = logging.getLogger("caged")
 
 
 class MonitorDescompactacao:
@@ -375,8 +377,8 @@ class DescompactadorCaged:
         # Criar diretório de destino se não existir
         self.diretorio_destino.mkdir(parents=True, exist_ok=True)
         
-        # Configurar logger padrão
-        self.logger = self._configurar_logger(nivel_log)
+        # Usar o logger centralizado configurado no main.py
+        self.logger = logging.getLogger("caged")
         
         # Inicializar sistema de monitoramento
         self.monitor = MonitorDescompactacao(self.logger, usar_emojis)
@@ -384,52 +386,7 @@ class DescompactadorCaged:
         # Carregar cache de metadados
         self._carregar_cache_metadados()
     
-    def _configurar_logger(self, nivel_log: str) -> logging.Logger:
-        """
-        Configura o logger padrão com formatação estruturada
-        
-        Args:
-            nivel_log: Nível de log (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-            
-        Returns:
-            Logger configurado
-        """
-        logger_instance = logging.getLogger("descompactador_caged")
-        
-        # Evitar duplicação de handlers
-        if logger_instance.handlers:
-            return logger_instance
-        
-        # Configurar nível
-        logger_instance.setLevel(getattr(logging, nivel_log.upper(), logging.INFO))
-        
-        # Criar formatter estruturado
-        formatter = logging.Formatter(
-            '%(asctime)s | %(name)s | %(levelname)s | %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S'
-        )
-        
-        # Handler para console
-        console_handler = logging.StreamHandler()
-        console_handler.setFormatter(formatter)
-        logger_instance.addHandler(console_handler)
-        
-        # Handler para arquivo (opcional)
-        try:
-            log_dir = Path("logs")
-            log_dir.mkdir(exist_ok=True)
-            
-            file_handler = logging.FileHandler(
-                log_dir / f"descompactador_caged_{datetime.now().strftime('%Y%m%d')}.log",
-                encoding='utf-8'
-            )
-            file_handler.setFormatter(formatter)
-            logger_instance.addHandler(file_handler)
-        except Exception:
-            # Se não conseguir criar arquivo de log, continua apenas com console
-            pass
-        
-        return logger_instance
+
     
     def _log_info(self, mensagem: str, emoji: str = "ℹ️"):
         """Log de informação com emoji opcional"""
