@@ -60,59 +60,11 @@ def configurar_logging(nivel: str = "WARNING", usar_emojis: bool = True, enable_
 
 
 # ============================================================================
-# VALIDAÇÕES CENTRALIZADAS
+# IMPORTAÇÕES DE VALIDAÇÃO
 # ============================================================================
 
-class ValidadorCaged:
-    """
-    Classe para validações centralizadas do sistema CAGED
-    """
-    
-    @staticmethod
-    def validar_ano_mes(ano: int, mes: int) -> tuple[bool, str]:
-        """Valida ano e mês"""
-        if ano is None:
-            return False, "Ano é obrigatório"
-        if ano < 2020 or ano > datetime.now().year:
-            return False, f"Ano deve estar entre 2020 e {datetime.now().year}"
-        if mes is not None and (mes < 1 or mes > 12):
-            return False, "Mês deve estar entre 1 e 12"
-        return True, ""
-    
-    @staticmethod
-    def validar_faixa_datas(ano_inicio: int, mes_inicio: int, ano_fim: int, mes_fim: int) -> tuple[bool, str]:
-        """Valida faixa de datas"""
-        if any(x is None for x in [ano_inicio, mes_inicio, ano_fim, mes_fim]):
-            return False, "Para faixa de datas, especifique --ano-inicio, --mes-inicio, --ano-fim e --mes-fim"
-        
-        # Validar anos e meses individuais
-        for ano in [ano_inicio, ano_fim]:
-            valido, msg = ValidadorCaged.validar_ano_mes(ano, None)
-            if not valido:
-                return False, msg
-        
-        for mes in [mes_inicio, mes_fim]:
-            if mes < 1 or mes > 12:
-                return False, "Meses devem estar entre 1 e 12"
-        
-        # Validar ordem cronológica
-        if ano_inicio > ano_fim or (ano_inicio == ano_fim and mes_inicio > mes_fim):
-            return False, "Data inicial deve ser anterior à data final"
-        
-        return True, ""
-    
-    @staticmethod
-    def validar_espaco_disco(diretorio: str = ".", min_gb: float = 1.0) -> tuple[bool, str]:
-        """Valida espaço disponível em disco"""
-        try:
-            import shutil
-            total, used, free = shutil.disk_usage(diretorio)
-            free_gb = free / (1024**3)
-            if free_gb < min_gb:
-                return False, f"Espaço insuficiente. Disponível: {free_gb:.1f}GB, Necessário: {min_gb}GB"
-            return True, ""
-        except Exception as e:
-            return False, f"Erro ao verificar espaço em disco: {e}"
+# Importar validadores centralizados
+from src.util.validators import ValidadorCaged
 
 
 # Logger global (será configurado na função cli)
@@ -289,6 +241,20 @@ def processar(ano, mes, ano_inicio, mes_inicio, ano_fim, mes_fim, todos_meses,
         click.echo(f"⚠️  Aviso: {msg}")
         if not click.confirm("Continuar mesmo assim?"):
             return
+    
+    # Validar conectividade FTP se download estiver habilitado
+    if executar_download:
+        click.echo("🔍 Validando conectividade FTP...")
+        valido, msg = ValidadorCaged.validar_conectividade_ftp()
+        if not valido:
+            click.echo(f"❌ Erro de conectividade: {msg}")
+            if not click.confirm("Continuar sem download?"):
+                return
+            else:
+                executar_download = False
+                click.echo("📥 Download desabilitado devido a problemas de conectividade")
+        else:
+            click.echo(f"✅ {msg}")
     
     # Validar campos se especificados
     if campos:
