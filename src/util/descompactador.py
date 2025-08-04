@@ -41,9 +41,19 @@ class DescompactadorCaged:
         self.diretorio_destino = Path(diretorio_destino)
         self.max_workers = max_workers
         self.metadados_arquivos: Dict[str, Dict] = {}
-
+        
+        # Cache de metadados persistente
+        self.cache_metadados = {}
+        self.arquivo_cache = self.diretorio_destino / ".cache_metadados.json"
+        
+        # Criar diretório de destino se não existir
+        self.diretorio_destino.mkdir(parents=True, exist_ok=True)
+        
         from loguru import logger
         self.logger = logger
+        
+        # Carregar cache de metadados
+        self._carregar_cache_metadados()
         
     def descompactar_arquivo(self, arquivo_7z: Path, destino: Optional[Path] = None, estrutura_complexa: bool = False) -> Tuple[bool, Dict]:
         """
@@ -99,6 +109,10 @@ class DescompactadorCaged:
                 self.logger.warning(f"⚠️  Descompactação concluída mas validação falhou para: {arquivo_7z.name}")
             
             self.metadados_arquivos[arquivo_7z.name] = metadados
+            
+            # Salvar metadados no cache persistente
+            self._salvar_metadados_cache(arquivo_7z, metadados)
+            
             return True, metadados
             
         except Exception as e:
@@ -1877,27 +1891,108 @@ class DescompactadorCaged:
                     temp_file.unlink()
                     print(f"🗑️  Removido: {temp_file.name}")
     
-    def gerar_relatorio_descompactacao(self, ano: Optional[int] = None) -> Dict:
+    def _mostrar_resumo_por_ano(self, metadados_por_ano: Dict[int, List[Dict]]) -> None:
         """
-        Gera relatório sobre os arquivos descompactados
+        Mostra resumo estatístico agrupado por ano
+        
+        Args:
+            metadados_por_ano: Dicionário com metadados agrupados por ano
+        """
+        self.logger.info("\n" + "="*60)
+        self.logger.info("📊 RESUMO POR ANO")
+        self.logger.info("="*60)
+        
+        for ano in sorted(metadados_por_ano.keys()):
+            metadados_ano = metadados_por_ano[ano]
+            
+            # Estatísticas básicas
+            total_arquivos = len(metadados_ano)
+            
+            # Agrupar por mês
+            por_mes = {}
+            por_uf = {}
+            por_tipo = {}
+            
+            for meta in metadados_ano:
+                # Por mês
+                mes = meta.get('mes', 'desconhecido')
+                por_mes[mes] = por_mes.get(mes, 0) + 1
+                
+                # Por UF
+                uf = meta.get('uf', 'desconhecida')
+                por_uf[uf] = por_uf.get(uf, 0) + 1
+                
+                # Por tipo
+                tipo = meta.get('tipo', 'desconhecido')
+                por_tipo[tipo] = por_tipo.get(tipo, 0) + 1
+            
+            # Exibir estatísticas do ano
+            self.logger.info(f"\n📅 ANO {ano}:")
+            self.logger.info(f"   📁 Total de arquivos: {total_arquivos}")
+            
+            # Meses com mais arquivos
+            if por_mes:
+                meses_ordenados = sorted(por_mes.items(), key=lambda x: x[1], reverse=True)
+                self.logger.info(f"   📆 Meses: {len(por_mes)} diferentes")
+                top_meses = meses_ordenados[:3]
+                for mes, count in top_meses:
+                    self.logger.info(f"      • {mes}: {count} arquivos")
+            
+            # UFs com mais arquivos
+            if por_uf:
+                ufs_ordenadas = sorted(por_uf.items(), key=lambda x: x[1], reverse=True)
+                self.logger.info(f"   🗺️  UFs: {len(por_uf)} diferentes")
+                top_ufs = ufs_ordenadas[:5]
+                for uf, count in top_ufs:
+                    self.logger.info(f"      • {uf}: {count} arquivos")
+            
+            # Tipos de arquivo
+            if por_tipo:
+                tipos_ordenados = sorted(por_tipo.items(), key=lambda x: x[1], reverse=True)
+                self.logger.info(f"   📋 Tipos: {len(por_tipo)} diferentes")
+                for tipo, count in tipos_ordenados:
+                    self.logger.info(f"      • {tipo}: {count} arquivos")
+        
+        self.logger.info("\n" + "="*60)
+    
+    def gerar_relatorio_descompactacao(self, ano: Optional[int] = None, incluir_metricas: bool = True) -> Dict:
+        """
+        Gera relatório detalhado sobre os arquivos descompactados
         
         Args:
             ano: Ano específico ou None para todos
+            incluir_metricas: Se deve incluir métricas de performance
             
         Returns:
-            Dict: Relatório com estatísticas
+            Dict: Relatório com estatísticas detalhadas
         """
+        import time
+        inicio = time.time()
+        
         arquivos = self.listar_arquivos_descompactados(ano)
         
-        # Agrupar por tipo e extensão
+        # Estatísticas básicas
         tipos = {}
         extensoes = {}
         competencias = {}
+        ufs = {}
+        tamanhos = []
+        
+        # Métricas de performance
+        tempo_processamento = 0
+        arquivos_processados = 0
         
         for arquivo in arquivos:
             # Contar por extensão
             ext = arquivo.suffix.lower()
             extensoes[ext] = extensoes.get(ext, 0) + 1
+            
+            # Tamanho do arquivo
+            try:
+                tamanho = arquivo.stat().st_size
+                tamanhos.append(tamanho)
+            except:
+                pass
             
             # Tentar extrair metadados do nome
             meta = self._extrair_metadados_nome(arquivo.name)
@@ -1908,17 +2003,53 @@ class DescompactadorCaged:
             
             # Contar por competência
             comp = meta.get("competencia", "desconhecida")
-            if comp not in competencias:
-                competencias[comp] = 0
-            competencias[comp] += 1
+            competencias[comp] = competencias.get(comp, 0) + 1
+            
+            # Contar por UF
+            uf = meta.get("uf", "desconhecida")
+            ufs[uf] = ufs.get(uf, 0) + 1
         
-        # Gerar relatório
-        return {
-            "total_arquivos": len(arquivos),
-            "por_extensao": extensoes,
-            "por_tipo": tipos,
-            "por_competencia": competencias
+        # Calcular estatísticas de tamanho
+        estatisticas_tamanho = {}
+        if tamanhos:
+            estatisticas_tamanho = {
+                "total_bytes": sum(tamanhos),
+                "media_bytes": sum(tamanhos) / len(tamanhos),
+                "maior_arquivo": max(tamanhos),
+                "menor_arquivo": min(tamanhos)
+            }
+        
+        # Métricas de performance
+        tempo_relatorio = time.time() - inicio
+        metricas_performance = {}
+        
+        if incluir_metricas:
+            metricas_performance = {
+                "tempo_geracao_relatorio": tempo_relatorio,
+                "arquivos_por_segundo": len(arquivos) / tempo_relatorio if tempo_relatorio > 0 else 0,
+                "timestamp_geracao": time.strftime("%Y-%m-%d %H:%M:%S")
+            }
+        
+        # Gerar relatório completo
+        relatorio = {
+            "resumo": {
+                "total_arquivos": len(arquivos),
+                "ano_filtro": ano,
+                "data_geracao": time.strftime("%Y-%m-%d %H:%M:%S")
+            },
+            "distribuicao": {
+                "por_extensao": dict(sorted(extensoes.items(), key=lambda x: x[1], reverse=True)),
+                "por_tipo": dict(sorted(tipos.items(), key=lambda x: x[1], reverse=True)),
+                "por_competencia": dict(sorted(competencias.items())),
+                "por_uf": dict(sorted(ufs.items(), key=lambda x: x[1], reverse=True))
+            },
+            "estatisticas_tamanho": estatisticas_tamanho
         }
+        
+        if incluir_metricas:
+            relatorio["metricas_performance"] = metricas_performance
+        
+        return relatorio
     
     def processar_dados_arquivo_caged(self, arquivo_descompactado: Path, metadados: Dict) -> List[Any]:
         """
@@ -2291,6 +2422,176 @@ class DescompactadorCaged:
             self.logger.error(f"❌ Erro ao criar indicadores para {competencia}: {e}")
         
         return indicadores
+    
+    def _carregar_cache_metadados(self) -> None:
+        """
+        Carrega cache de metadados do arquivo persistente
+        """
+        try:
+            if self.arquivo_cache.exists():
+                import json
+                with open(self.arquivo_cache, 'r', encoding='utf-8') as f:
+                    self.cache_metadados = json.load(f)
+                self.logger.info(f"📋 Cache de metadados carregado: {len(self.cache_metadados)} entradas")
+            else:
+                self.cache_metadados = {}
+                self.logger.info("📋 Cache de metadados inicializado (vazio)")
+        except Exception as e:
+            self.logger.warning(f"⚠️  Erro ao carregar cache de metadados: {e}")
+            self.cache_metadados = {}
+    
+    def _salvar_cache_metadados(self) -> None:
+        """
+        Salva cache de metadados no arquivo persistente
+        """
+        try:
+            import json
+            with open(self.arquivo_cache, 'w', encoding='utf-8') as f:
+                json.dump(self.cache_metadados, f, indent=2, ensure_ascii=False)
+            self.logger.debug(f"💾 Cache de metadados salvo: {len(self.cache_metadados)} entradas")
+        except Exception as e:
+            self.logger.error(f"❌ Erro ao salvar cache de metadados: {e}")
+    
+    def _obter_metadados_cache(self, arquivo_7z: Path) -> Optional[Dict]:
+        """
+        Obtém metadados do cache se disponível e válido
+        
+        Args:
+            arquivo_7z: Caminho do arquivo .7z
+            
+        Returns:
+            Metadados do cache ou None se não disponível/inválido
+        """
+        try:
+            chave_cache = str(arquivo_7z.absolute())
+            
+            if chave_cache not in self.cache_metadados:
+                return None
+            
+            metadados_cache = self.cache_metadados[chave_cache]
+            
+            # Verificar se o arquivo foi modificado desde o cache
+            timestamp_arquivo = arquivo_7z.stat().st_mtime
+            timestamp_cache = metadados_cache.get('timestamp_cache', 0)
+            
+            if timestamp_arquivo > timestamp_cache:
+                # Arquivo foi modificado, cache inválido
+                del self.cache_metadados[chave_cache]
+                return None
+            
+            self.logger.debug(f"📋 Metadados obtidos do cache: {arquivo_7z.name}")
+            return metadados_cache
+            
+        except Exception as e:
+            self.logger.debug(f"⚠️  Erro ao obter metadados do cache: {e}")
+            return None
+    
+    def _salvar_metadados_cache(self, arquivo_7z: Path, metadados: Dict) -> None:
+        """
+        Salva metadados no cache
+        
+        Args:
+            arquivo_7z: Caminho do arquivo .7z
+            metadados: Metadados a serem salvos
+        """
+        try:
+            chave_cache = str(arquivo_7z.absolute())
+            
+            # Adicionar timestamp do cache
+            metadados_cache = metadados.copy()
+            metadados_cache['timestamp_cache'] = arquivo_7z.stat().st_mtime
+            metadados_cache['timestamp_salvamento'] = datetime.now().isoformat()
+            
+            self.cache_metadados[chave_cache] = metadados_cache
+            
+            # Salvar cache periodicamente (a cada 10 entradas)
+            if len(self.cache_metadados) % 10 == 0:
+                self._salvar_cache_metadados()
+            
+            self.logger.debug(f"💾 Metadados salvos no cache: {arquivo_7z.name}")
+            
+        except Exception as e:
+            self.logger.debug(f"⚠️  Erro ao salvar metadados no cache: {e}")
+    
+    def limpar_cache_metadados(self, forcar: bool = False) -> None:
+        """
+        Limpa cache de metadados
+        
+        Args:
+            forcar: Se deve forçar limpeza mesmo com entradas válidas
+        """
+        try:
+            if forcar:
+                self.cache_metadados.clear()
+                if self.arquivo_cache.exists():
+                    self.arquivo_cache.unlink()
+                self.logger.info("🧹 Cache de metadados limpo completamente")
+            else:
+                # Limpar apenas entradas inválidas
+                chaves_invalidas = []
+                
+                for chave, metadados in self.cache_metadados.items():
+                    arquivo_path = Path(chave)
+                    if not arquivo_path.exists():
+                        chaves_invalidas.append(chave)
+                
+                for chave in chaves_invalidas:
+                    del self.cache_metadados[chave]
+                
+                if chaves_invalidas:
+                    self._salvar_cache_metadados()
+                    self.logger.info(f"🧹 {len(chaves_invalidas)} entradas inválidas removidas do cache")
+                else:
+                    self.logger.info("✅ Cache de metadados já está limpo")
+                    
+        except Exception as e:
+            self.logger.error(f"❌ Erro ao limpar cache de metadados: {e}")
+    
+    def estatisticas_cache_metadados(self) -> Dict:
+        """
+        Retorna estatísticas do cache de metadados
+        
+        Returns:
+            Dicionário com estatísticas do cache
+        """
+        try:
+            total_entradas = len(self.cache_metadados)
+            
+            if total_entradas == 0:
+                return {
+                    "total_entradas": 0,
+                    "tamanho_arquivo_cache": 0,
+                    "entradas_validas": 0,
+                    "entradas_invalidas": 0
+                }
+            
+            # Verificar entradas válidas
+            entradas_validas = 0
+            entradas_invalidas = 0
+            
+            for chave in self.cache_metadados.keys():
+                arquivo_path = Path(chave)
+                if arquivo_path.exists():
+                    entradas_validas += 1
+                else:
+                    entradas_invalidas += 1
+            
+            # Tamanho do arquivo de cache
+            tamanho_cache = 0
+            if self.arquivo_cache.exists():
+                tamanho_cache = self.arquivo_cache.stat().st_size
+            
+            return {
+                "total_entradas": total_entradas,
+                "entradas_validas": entradas_validas,
+                "entradas_invalidas": entradas_invalidas,
+                "tamanho_arquivo_cache": tamanho_cache,
+                "arquivo_cache": str(self.arquivo_cache)
+            }
+            
+        except Exception as e:
+            self.logger.error(f"❌ Erro ao obter estatísticas do cache: {e}")
+            return {"erro": str(e)}
 
 
 # Função auxiliar para teste
