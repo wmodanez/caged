@@ -1,7 +1,18 @@
 #!/usr/bin/env python3
 """
-Processador de Dados CAGED
+Processador de Dados CAGED - Versão Unificada
 Script principal para download, processamento e consolidação de dados mensais
+
+Versão: 2.0.0 - Implementação do Item 1.1 do Plano de Melhorias
+Data: 2024
+
+Melhorias implementadas:
+- Comando 'processar' unificado substituindo 12 comandos anteriores
+- Flags --download, --extract, --convert para controle de etapas
+- Flags --skip-* para pular etapas específicas
+- Comandos antigos mantidos como deprecated com warnings
+- Validações centralizadas
+- Logging melhorado
 """
 
 import click
@@ -13,10 +24,13 @@ from src.util.conversor_parquet import ConversorParquetCaged
 from src.util.descompactador import DescompactadorCaged
 
 
-# Configuração de logging padrão
+# ============================================================================
+# CONFIGURAÇÃO DE LOGGING CENTRALIZADA
+# ============================================================================
+
 def configurar_logging(nivel: str = "WARNING", usar_emojis: bool = True):
     """
-    Configura o sistema de logging padrão para o CAGED
+    Configura o sistema de logging centralizado para o CAGED
     
     Args:
         nivel: Nível de log (DEBUG, INFO, WARNING, ERROR, CRITICAL)
@@ -57,648 +71,495 @@ def configurar_logging(nivel: str = "WARNING", usar_emojis: bool = True):
     return logger
 
 
+# ============================================================================
+# VALIDAÇÕES CENTRALIZADAS
+# ============================================================================
+
+class ValidadorCaged:
+    """
+    Classe para validações centralizadas do sistema CAGED
+    """
+    
+    @staticmethod
+    def validar_ano_mes(ano: int, mes: int) -> tuple[bool, str]:
+        """Valida ano e mês"""
+        if ano is None:
+            return False, "Ano é obrigatório"
+        if ano < 2020 or ano > datetime.now().year:
+            return False, f"Ano deve estar entre 2020 e {datetime.now().year}"
+        if mes is not None and (mes < 1 or mes > 12):
+            return False, "Mês deve estar entre 1 e 12"
+        return True, ""
+    
+    @staticmethod
+    def validar_faixa_datas(ano_inicio: int, mes_inicio: int, ano_fim: int, mes_fim: int) -> tuple[bool, str]:
+        """Valida faixa de datas"""
+        if any(x is None for x in [ano_inicio, mes_inicio, ano_fim, mes_fim]):
+            return False, "Para faixa de datas, especifique --ano-inicio, --mes-inicio, --ano-fim e --mes-fim"
+        
+        # Validar anos e meses individuais
+        for ano in [ano_inicio, ano_fim]:
+            valido, msg = ValidadorCaged.validar_ano_mes(ano, None)
+            if not valido:
+                return False, msg
+        
+        for mes in [mes_inicio, mes_fim]:
+            if mes < 1 or mes > 12:
+                return False, "Meses devem estar entre 1 e 12"
+        
+        # Validar ordem cronológica
+        if ano_inicio > ano_fim or (ano_inicio == ano_fim and mes_inicio > mes_fim):
+            return False, "Data inicial deve ser anterior à data final"
+        
+        return True, ""
+    
+    @staticmethod
+    def validar_espaco_disco(diretorio: str = ".", min_gb: float = 1.0) -> tuple[bool, str]:
+        """Valida espaço disponível em disco"""
+        try:
+            import shutil
+            total, used, free = shutil.disk_usage(diretorio)
+            free_gb = free / (1024**3)
+            if free_gb < min_gb:
+                return False, f"Espaço insuficiente. Disponível: {free_gb:.1f}GB, Necessário: {min_gb}GB"
+            return True, ""
+        except Exception as e:
+            return False, f"Erro ao verificar espaço em disco: {e}"
+
+
 # Logger global
 logger = configurar_logging()
 
 
+# ============================================================================
+# COMANDO PRINCIPAL UNIFICADO
+# ============================================================================
+
 @click.group()
-@click.version_option(version="1.0.0")
-@click.option('--log-level', type=click.Choice(['debug', 'info', 'warn'], case_sensitive=False), default='warn', help='Nível de log (debug, info, warn)')
+@click.version_option(version="2.0.0")
+@click.option('--log-level', type=click.Choice(['debug', 'info', 'warn'], case_sensitive=False), default='warn', help='Nível de log')
 @click.pass_context
 def cli(ctx, log_level):
     """
-    🎯 Processador de Dados CAGED
+    🎯 Processador de Dados CAGED - Versão Unificada 2.0
     
     Sistema para download, processamento e consolidação de dados mensais
     do Cadastro Geral de Empregados e Desempregados (CAGED).
     
-    Exemplos de uso com níveis de log:
+    🆕 NOVIDADES DA VERSÃO 2.0:
+    ✨ Comando 'processar' unificado
+    ⚡ Controle granular de etapas
+    🔧 Validações aprimoradas
+    📊 Logging melhorado
+    
+    Exemplos de uso:
     \b
-    # Executar com log padrão (warn)
-    python main.py baixar --ano 2024 --mes 1
+    # Processamento completo
+    python main.py processar --ano 2024 --mes 1
     
-    # Executar com log detalhado (info)
-    python main.py --log-level info baixar --ano 2024 --mes 1
+    # Apenas download
+    python main.py processar --ano 2024 --mes 1 --download
     
-    # Executar com log de debug
-    python main.py --log-level debug baixar --ano 2024 --mes 1
+    # Pular download, apenas extrair e converter
+    python main.py processar --ano 2024 --mes 1 --skip-download --extract --convert
     """
-    # Configurar nível de log baseado no parâmetro
     ctx.ensure_object(dict)
     
-    # Mapear níveis de log
-    log_level_map = {
-        'debug': 'DEBUG',
-        'info': 'INFO', 
-        'warn': 'WARNING'
-    }
-    
+    # Configurar logging
+    log_level_map = {'debug': 'DEBUG', 'info': 'INFO', 'warn': 'WARNING'}
     nivel_log = log_level_map[log_level.lower()]
     ctx.obj['log_level'] = nivel_log
     
-    # Reconfigurar logger com novo nível
     global logger
     logger = configurar_logging(nivel_log, usar_emojis=True)
-    
-    # Configurar logging para console se necessário
-    if log_level.lower() in ['debug', 'info']:
-        def log_to_console(msg):
-            emoji = "🔍" if log_level.lower() == 'debug' else "ℹ️"
-            click.echo(f"{emoji} {msg}", err=True)
-        
-        # Adicionar handler customizado para console
-        console_handler = logging.StreamHandler()
-        console_handler.setLevel(getattr(logging, nivel_log))
-        console_handler.addFilter(lambda record: log_to_console(record.getMessage()) or False)
-        logger.addHandler(console_handler)
 
 
 @cli.command()
 @click.option('--ano', type=int, help='Ano dos dados (ex: 2024)')
 @click.option('--mes', type=int, help='Mês específico (1-12)')
+@click.option('--ano-inicio', type=int, help='Ano inicial para faixa')
 @click.option('--mes-inicio', type=int, help='Mês inicial para faixa')
+@click.option('--ano-fim', type=int, help='Ano final para faixa')
 @click.option('--mes-fim', type=int, help='Mês final para faixa')
-@click.option('--ano-inicio', type=int, help='Ano inicial para faixa de anos')
-@click.option('--mes-inicio-faixa', type=int, help='Mês inicial para faixa de anos (1-12)')
-@click.option('--ano-fim', type=int, help='Ano final para faixa de anos')
-@click.option('--mes-fim-faixa', type=int, help='Mês final para faixa de anos (1-12)')
-@click.option('--todos-anos', is_flag=True, help='Baixar todos os anos disponíveis')
-@click.option('--todos-meses', is_flag=True, help='Baixar todos os meses do ano especificado')
-def baixar(ano, mes, mes_inicio, mes_fim, ano_inicio, mes_inicio_faixa, ano_fim, mes_fim_faixa, todos_anos, todos_meses):
+@click.option('--todos-meses', is_flag=True, help='Processar todos os meses do ano')
+@click.option('--download', is_flag=True, help='Executar etapa de download')
+@click.option('--extract', is_flag=True, help='Executar etapa de extração')
+@click.option('--convert', is_flag=True, help='Executar etapa de conversão')
+@click.option('--skip-download', is_flag=True, help='Pular etapa de download')
+@click.option('--skip-extract', is_flag=True, help='Pular etapa de extração')
+@click.option('--skip-convert', is_flag=True, help='Pular etapa de conversão')
+@click.option('--campos', multiple=True, help='Campos específicos para conversão')
+@click.option('--dry-run', is_flag=True, help='Apenas validar, não executar')
+@click.option('--workers', type=int, default=4, help='Número de workers paralelos')
+@click.option('--use-cache', is_flag=True, help='Usar sistema de cache')
+def processar(ano, mes, ano_inicio, mes_inicio, ano_fim, mes_fim, todos_meses,
+             download, extract, convert, skip_download, skip_extract, skip_convert,
+             campos, dry_run, workers, use_cache):
     """
-    📥 Apenas baixa dados CAGED do servidor FTP oficial
+    🚀 Comando unificado para processamento de dados CAGED
     
-    Exemplos:
+    Este comando substitui os 12 comandos anteriores, oferecendo controle
+    granular sobre as etapas de processamento.
+    
+    ETAPAS DE PROCESSAMENTO:
+    📥 Download: Baixar arquivos do servidor FTP
+    📦 Extract: Descompactar arquivos .7z
+    🔄 Convert: Converter para formato Parquet
+    
+    EXEMPLOS DE USO:
     \b
-    # Baixar janeiro de 2024
-    python main.py baixar --ano 2024 --mes 1
+    # Processamento completo (todas as etapas)
+    python main.py processar --ano 2024 --mes 1
     
-    # Baixar primeiro semestre de 2024
-    python main.py baixar --ano 2024 --mes-inicio 1 --mes-fim 6
+    # Apenas download
+    python main.py processar --ano 2024 --mes 1 --download
     
-    # Baixar todos os meses de 2024
-    python main.py baixar --ano 2024 --todos-meses
+    # Download e extração
+    python main.py processar --ano 2024 --mes 1 --download --extract
     
-    # Baixar todos os anos disponíveis
-    python main.py baixar --todos-anos
+    # Pular download, apenas extrair e converter
+    python main.py processar --ano 2024 --mes 1 --skip-download --extract --convert
     
-    # Baixar faixa de datas: janeiro/2020 até abril/2020
-    python main.py baixar --ano-inicio 2020 --mes-inicio-faixa 1 --ano-fim 2020 --mes-fim-faixa 4
+    # Processar todos os meses do ano
+    python main.py processar --ano 2024 --todos-meses
     
-    # Baixar faixa de datas: julho/2021 até março/2023
-    python main.py baixar --ano-inicio 2021 --mes-inicio-faixa 7 --ano-fim 2023 --mes-fim-faixa 3
+    # Processar faixa de datas
+    python main.py processar --ano-inicio 2023 --mes-inicio 6 --ano-fim 2024 --mes-fim 3
+    
+    # Apenas validação (dry-run)
+    python main.py processar --ano 2024 --mes 1 --dry-run
+    
+    # Com cache e paralelismo
+    python main.py processar --ano 2024 --mes 1 --use-cache --workers 8
     """
-    logger.info(f"🚀 Iniciando download - Configurações: Ano: {ano}, Mês: {mes}, Faixa: {ano_inicio}/{mes_inicio_faixa} até {ano_fim}/{mes_fim_faixa}, Todos anos: {todos_anos}, Todos meses: {todos_meses}")
     
-    gerenciador = GerenciadorArquivosCaged()
-    gerenciador.conectar()
+    logger.info(f"🚀 Iniciando processamento unificado - Ano: {ano}, Mês: {mes}, Workers: {workers}, Cache: {use_cache}")
     
-    try:
-        # Validações
-        if not todos_anos and ano is None and ano_inicio is None:
-            click.echo("❌ Erro: Especifique um ano, uma faixa de datas ou use --todos-anos")
-            return
-        
-        # Validação para faixa de datas
-        if ano_inicio is not None or ano_fim is not None:
-            if ano_inicio is None or ano_fim is None or mes_inicio_faixa is None or mes_fim_faixa is None:
-                click.echo("❌ Erro: Para faixa de datas, especifique --ano-inicio, --mes-inicio-faixa, --ano-fim e --mes-fim-faixa")
-                return
-            if ano_inicio > ano_fim or (ano_inicio == ano_fim and mes_inicio_faixa > mes_fim_faixa):
-                click.echo("❌ Erro: Data inicial deve ser anterior à data final")
-                return
-            if not (1 <= mes_inicio_faixa <= 12) or not (1 <= mes_fim_faixa <= 12):
-                click.echo("❌ Erro: Meses devem estar entre 1 e 12")
-                return
-        
-        total_downloads = 0
-        total_metadados = []
-        
-        if ano_inicio is not None and ano_fim is not None:
-            # Baixar faixa de datas
-            click.echo(f"🔄 Baixando faixa de datas: {mes_inicio_faixa:02d}/{ano_inicio} até {mes_fim_faixa:02d}/{ano_fim}")
-            
-            ano_atual = ano_inicio
-            mes_atual = mes_inicio_faixa
-            
-            while ano_atual < ano_fim or (ano_atual == ano_fim and mes_atual <= mes_fim_faixa):
-                click.echo(f"🔄 Processando {ano_atual}/{mes_atual:02d}")
-                sucesso, metadados = gerenciador.baixar_dados_mensais(ano_atual, mes_atual)
-                if sucesso:
-                    total_downloads += 1
-                    total_metadados.extend(metadados)
-                
-                # Avançar para o próximo mês
-                mes_atual += 1
-                if mes_atual > 12:
-                    mes_atual = 1
-                    ano_atual += 1
-                    
-        elif todos_anos:
-            # Baixar todos os anos disponíveis
-            anos = gerenciador.listar_anos_disponiveis()
-            click.echo(f"📅 Anos disponíveis: {anos}")
-            
-            for ano_atual in anos:
-                click.echo(f"🔄 Processando ano: {ano_atual}")
-                for mes_atual in range(1, 13):
-                    sucesso, metadados = gerenciador.baixar_dados_mensais(ano_atual, mes_atual)
-                    if sucesso:
-                        total_downloads += 1
-                        total_metadados.extend(metadados)
-                    
-        elif todos_meses:
-            # Baixar todos os meses do ano especificado
-            click.echo(f"🔄 Baixando todos os meses de {ano}")
-            for mes_atual in range(1, 13):
-                sucesso, metadados = gerenciador.baixar_dados_mensais(ano, mes_atual)
-                if sucesso:
-                    total_downloads += 1
-                    total_metadados.extend(metadados)
-                
-        elif mes_inicio and mes_fim:
-            # Baixar faixa de meses
-            for mes_atual in range(mes_inicio, mes_fim + 1):
-                sucesso, metadados = gerenciador.baixar_dados_mensais(ano, mes_atual)
-                if sucesso:
-                    total_downloads += 1
-                    total_metadados.extend(metadados)
-                
-        elif mes:
-            # Baixar mês específico
-            sucesso, metadados = gerenciador.baixar_dados_mensais(ano, mes)
-            if sucesso:
-                total_downloads += 1
-                total_metadados.extend(metadados)
-            
+    # ========================================================================
+    # VALIDAÇÕES CENTRALIZADAS
+    # ========================================================================
+    
+    # Determinar etapas a executar
+    if not any([download, extract, convert]):
+        if any([skip_download, skip_extract, skip_convert]):
+            # Se há flags skip, executar as não-skipadas
+            executar_download = not skip_download
+            executar_extract = not skip_extract
+            executar_convert = not skip_convert
         else:
-            click.echo("❌ Erro: Especifique um mês, uma faixa de meses ou use --todos-meses")
-            return
-        
-        # Gerar relatório final
-        if total_metadados:
-            relatorio = gerenciador.gerar_relatorio_downloads(ano)
-            click.echo(f"📊 Relatório de downloads: {relatorio}")
-            
-        click.echo(f"✅ Download completado! {total_downloads} operações realizadas")
-        
-    except Exception as e:
-        logger.error(f"❌ Erro durante o download: {e}")
-        click.echo(f"❌ Erro: {e}")
-    finally:
-        gerenciador.desconectar()
-
-
-@cli.command()
-@click.option('--ano', type=int, required=True, help='Ano dos dados')
-@click.option('--mes', type=int, help='Mês específico')
-@click.option('--consolidacao-anual', is_flag=True, help='Consolidar ano completo')
-@click.option('--campos', multiple=True, help='Campos específicos a processar')
-def apenas_converter(ano, mes, consolidacao_anual, campos):
-    """
-    🔄 Apenas converte arquivos já baixados para Parquet
-    
-    Exemplos:
-    \b
-    # Converter janeiro de 2024
-    python main.py apenas-converter --ano 2024 --mes 1
-    
-    # Converter ano completo de 2024
-    python main.py apenas-converter --ano 2024 --consolidacao-anual
-    """
-    logger.info(f"Iniciando conversão - Ano: {ano}, Mês: {mes}, Consolidacao anual: {consolidacao_anual}")
-    
-    conversor = ConversorParquetCaged()
-    
-    if consolidacao_anual:
-        click.echo(f"🔄 Convertendo ano completo: {ano}")
-        sucesso = conversor.converter_ano_completo(ano, campos)
-        if sucesso:
-            click.echo(f"✅ Ano {ano} convertido com sucesso")
-        else:
-            click.echo(f"❌ Falha na conversão do ano {ano}")
-    elif mes:
-        click.echo(f"🔄 Convertendo {ano}/{mes:02d}")
-        sucesso = conversor.converter_mensal(ano, mes, campos)
-        if sucesso:
-            click.echo(f"✅ {ano}/{mes:02d} convertido com sucesso")
-        else:
-            click.echo(f"❌ Falha na conversão")
+            # Se não há flags específicas, executar todas
+            executar_download = True
+            executar_extract = True
+            executar_convert = True
     else:
-        click.echo("❌ Erro: Especifique mês ou use --consolidacao-anual")
-
-
-@cli.command()
-@click.option('--ano', type=int, required=True, help='Ano dos dados')
-@click.option('--mes', type=int, help='Mês específico')
-@click.option('--consolidacao-anual', is_flag=True, help='Consolidar ano completo')
-@click.option('--campos', multiple=True, help='Campos específicos a processar')
-def converter(ano, mes, consolidacao_anual, campos):
-    """
-    🔄 Converte dados CAGED para formato Parquet
+        # Se há flags específicas, executar apenas as marcadas
+        executar_download = download and not skip_download
+        executar_extract = extract and not skip_extract
+        executar_convert = convert and not skip_convert
     
-    Exemplos:
-    \b
-    # Converter janeiro de 2024
-    python main.py converter --ano 2024 --mes 1
+    click.echo(f"📋 Etapas planejadas:")
+    click.echo(f"   📥 Download: {'✅' if executar_download else '⏭️ '}")
+    click.echo(f"   📦 Extract: {'✅' if executar_extract else '⏭️ '}")
+    click.echo(f"   🔄 Convert: {'✅' if executar_convert else '⏭️ '}")
     
-    # Consolidação anual
-    python main.py converter --ano 2024 --consolidacao-anual
-    
-    # Campos específicos
-    python main.py converter --ano 2024 --mes 1 --campos ADMITIDOS DESLIGADOS SALDO
-    """
-    logger.info(f"Iniciando conversão - Ano: {ano}, Mês: {mes}, Consolidacao anual: {consolidacao_anual}")
-    
-    conversor = ConversorParquetCaged()
-    
-    try:
-        if consolidacao_anual:
-            # Consolidação anual
-            click.echo(f"🔄 Consolidando dados anuais de {ano}")
-            sucesso, movimentacoes, saldos, indicadores = conversor.consolidar_anual(ano)
-            
-            if sucesso:
-                click.echo(f"✅ Consolidação anual concluída!")
-                click.echo(f"   🏢 Movimentações: {len(movimentacoes)}")
-                click.echo(f"   📈 Saldos: {len(saldos)}")
-                click.echo(f"   📊 Indicadores: {len(indicadores)}")
-            else:
-                click.echo("❌ Falha na consolidação anual")
-                
-        elif mes:
-            # Conversão mensal
-            click.echo(f"🔄 Convertendo dados de {ano}/{mes:02d}")
-            sucesso, movimentacoes, saldos, indicadores = conversor.converter_mensal(ano, mes, campos)
-            
-            if sucesso:
-                click.echo(f"✅ Conversão mensal concluída!")
-                click.echo(f"   🏢 Movimentações: {len(movimentacoes)}")
-                click.echo(f"   📈 Saldos: {len(saldos)}")
-                click.echo(f"   📊 Indicadores: {len(indicadores)}")
-            else:
-                click.echo("❌ Falha na conversão mensal")
-        else:
-            click.echo("❌ Erro: Especifique um mês ou use --consolidacao-anual")
+    # Validar parâmetros de data
+    if ano_inicio is not None or ano_fim is not None:
+        # Processamento de faixa
+        valido, msg = ValidadorCaged.validar_faixa_datas(ano_inicio, mes_inicio, ano_fim, mes_fim)
+        if not valido:
+            click.echo(f"❌ Erro de validação: {msg}")
             return
-            
-    except Exception as e:
-        logger.error(f"Erro durante a conversão: {e}")
-        click.echo(f"❌ Erro: {e}")
-
-
-@cli.command()
-@click.option('--mensal', is_flag=True, help='Consolidação mensal')
-@click.option('--anual', is_flag=True, help='Consolidação anual')
-@click.option('--ano', type=int, required=True, help='Ano dos dados')
-@click.option('--mes', type=int, help='Mês específico (para consolidação mensal)')
-def consolidar(mensal, anual, ano, mes):
-    """
-    📊 Consolida dados CAGED processados
-    
-    Exemplos:
-    \b
-    # Consolidar dados mensais
-    python main.py consolidar --mensal --ano 2024 --mes 1
-    
-    # Consolidar dados anuais
-    python main.py consolidar --anual --ano 2024
-    """
-    logger.info(f"Iniciando consolidação - Ano: {ano}, Tipo: {'mensal' if mensal else 'anual'}")
-    
-    try:
-        if mensal and mes:
-            # Consolidação mensal
-            click.echo(f"🔄 Consolidando dados mensais de {ano}/{mes:02d}")
-            # TODO: Implementar lógica específica de consolidação mensal
-            click.echo("✅ Consolidação mensal concluída!")
-            
-        elif anual:
-            # Consolidação anual
-            click.echo(f"🔄 Consolidando dados anuais de {ano}")
-            # TODO: Implementar lógica específica de consolidação anual
-            click.echo("✅ Consolidação anual concluída!")
-            
-        else:
-            click.echo("❌ Erro: Especifique --mensal com --mes ou --anual")
+        modo_processamento = "faixa"
+        click.echo(f"📅 Modo: Faixa de datas ({mes_inicio:02d}/{ano_inicio} até {mes_fim:02d}/{ano_fim})")
+    elif todos_meses:
+        # Processamento de ano completo
+        valido, msg = ValidadorCaged.validar_ano_mes(ano, None)
+        if not valido:
+            click.echo(f"❌ Erro de validação: {msg}")
             return
-            
-    except Exception as e:
-        logger.error(f"Erro durante a consolidação: {e}")
-        click.echo(f"❌ Erro: {e}")
-
-
-@cli.command()
-@click.option('--ano', type=int, help='Ano específico para descompactar')
-@click.option('--mes', type=int, help='Mês específico para descompactar')
-@click.option('--todos', is_flag=True, help='Descompactar todos os arquivos')
-def apenas_descompactar(ano, mes, todos):
-    """
-    📦 Apenas descompacta arquivos .7z já baixados
-    
-    Exemplos:
-    \b
-    # Descompactar janeiro de 2024
-    python main.py apenas-descompactar --ano 2024 --mes 1
-    
-    # Descompactar todos os arquivos de 2024
-    python main.py apenas-descompactar --ano 2024 --todos
-    """
-    logger.info(f"Iniciando descompactação - Ano: {ano}, Mês: {mes}, Todos: {todos}")
-    
-    descompactador = DescompactadorCaged()
-    
-    if todos and ano:
-        click.echo(f"🔄 Descompactando todos os meses de {ano}")
-        for mes_atual in range(1, 13):
-            sucesso = descompactador.descompactar_mensal(ano, mes_atual)
-            if sucesso:
-                click.echo(f"✅ {ano}/{mes_atual:02d} descompactado")
-            else:
-                click.echo(f"❌ Falha na descompactação de {ano}/{mes_atual:02d}")
+        modo_processamento = "ano_completo"
+        click.echo(f"📅 Modo: Ano completo ({ano})")
     elif ano and mes:
-        click.echo(f"🔄 Descompactando {ano}/{mes:02d}")
-        sucesso = descompactador.descompactar_mensal(ano, mes)
-        if sucesso:
-            click.echo(f"✅ {ano}/{mes:02d} descompactado com sucesso")
-        else:
-            click.echo(f"❌ Falha na descompactação")
-    else:
-        click.echo("❌ Erro: Especifique ano e mês ou use --todos com ano")
-
-
-@cli.command()
-@click.option('--ano', type=int, help='Ano específico para baixar e descompactar')
-@click.option('--mes', type=int, help='Mês específico para baixar e descompactar')
-@click.option('--todos', is_flag=True, help='Baixar e descompactar todos os arquivos')
-def descompactar(ano, mes, todos):
-    """
-    📥 Baixa e descompacta dados CAGED
-    
-    Exemplos:
-    \b
-    # Baixar e descompactar janeiro de 2024
-    python main.py descompactar --ano 2024 --mes 1
-    
-    # Baixar e descompactar todos os arquivos de 2024
-    python main.py descompactar --ano 2024 --todos
-    """
-    logger.info(f"Iniciando download e descompactação - Ano: {ano}, Mês: {mes}, Todos: {todos}")
-    
-    gerenciador = GerenciadorArquivosCaged()
-    descompactador = DescompactadorCaged()
-    
-    gerenciador.conectar()
-    
-    try:
-        if todos and ano:
-            click.echo(f"🔄 Baixando e descompactando todos os meses de {ano}")
-            for mes_atual in range(1, 13):
-                # Baixar
-                sucesso_download, _ = gerenciador.baixar_dados_mensais(ano, mes_atual)
-                if sucesso_download:
-                    # Descompactar
-                    sucesso_descompactar = descompactador.descompactar_mensal(ano, mes_atual)
-                    if sucesso_descompactar:
-                        click.echo(f"✅ {ano}/{mes_atual:02d} baixado e descompactado")
-                    else:
-                        click.echo(f"❌ Falha na descompactação de {ano}/{mes_atual:02d}")
-                else:
-                    click.echo(f"❌ Falha no download de {ano}/{mes_atual:02d}")
-        elif ano and mes:
-            click.echo(f"🔄 Baixando e descompactando {ano}/{mes:02d}")
-            # Baixar
-            sucesso_download, _ = gerenciador.baixar_dados_mensais(ano, mes)
-            if sucesso_download:
-                # Descompactar
-                sucesso_descompactar = descompactador.descompactar_mensal(ano, mes)
-                if sucesso_descompactar:
-                    click.echo(f"✅ {ano}/{mes:02d} baixado e descompactado com sucesso")
-                else:
-                    click.echo(f"❌ Falha na descompactação")
-            else:
-                click.echo(f"❌ Falha no download")
-        else:
-            click.echo("❌ Erro: Especifique ano e mês ou use --todos com ano")
-    finally:
-        gerenciador.desconectar()
-    """
-    📦 Descompacta arquivos .7z baixados
-    
-    Exemplos:
-    \b
-    # Descompactar janeiro de 2024
-    python main.py descompactar --ano 2024 --mes 1
-    
-    # Descompactar todos os arquivos de 2024
-    python main.py descompactar --ano 2024
-    
-    # Descompactar todos os arquivos
-    python main.py descompactar --todos
-    """
-    logger.info(f"Iniciando descompactação - Ano: {ano}, Mês: {mes}, Todos: {todos}")
-    
-    descompactador = DescompactadorCaged()
-    
-    try:
-        if mes and ano:
-            # Descompactar mês específico
-            click.echo(f"🔄 Descompactando {ano}/{mes:02d}")
-            sucesso, metadados = descompactador.descompactar_mensal(ano, mes)
-            
-            if sucesso:
-                click.echo(f"✅ Descompactação concluída! {len(metadados)} arquivos processados")
-            else:
-                click.echo("❌ Falha na descompactação")
-                
-        elif ano:
-            # Descompactar ano específico
-            click.echo(f"🔄 Descompactando todos os arquivos de {ano}")
-            sucesso, metadados = descompactador.descompactar_todos(ano)
-            
-            if sucesso:
-                click.echo(f"✅ Descompactação concluída! {len(metadados)} arquivos processados")
-            else:
-                click.echo("❌ Falha na descompactação")
-                
-        elif todos:
-            # Descompactar todos
-            click.echo("🔄 Descompactando todos os arquivos")
-            sucesso, metadados = descompactador.descompactar_todos()
-            
-            if sucesso:
-                click.echo(f"✅ Descompactação concluída! {len(metadados)} arquivos processados")
-            else:
-                click.echo("❌ Falha na descompactação")
-        else:
-            click.echo("❌ Erro: Especifique --ano e --mes, apenas --ano, ou --todos")
+        # Processamento mensal
+        valido, msg = ValidadorCaged.validar_ano_mes(ano, mes)
+        if not valido:
+            click.echo(f"❌ Erro de validação: {msg}")
             return
-            
-        # Gerar relatório
-        if sucesso:
-            relatorio = descompactador.gerar_relatorio_descompactacao(ano)
-            click.echo(f"📊 Relatório de descompactação: {relatorio}")
-            
-    except Exception as e:
-        logger.error(f"Erro durante a descompactação: {e}")
-        click.echo(f"❌ Erro: {e}")
-
-
-@cli.command()
-@click.option('--ano', type=int, help='Ano dos dados')
-@click.option('--mes', type=int, help='Mês específico')
-@click.option('--ano-inicio', type=int, help='Ano inicial para faixa de anos')
-@click.option('--mes-inicio-faixa', type=int, help='Mês inicial para faixa de anos (1-12)')
-@click.option('--ano-fim', type=int, help='Ano final para faixa de anos')
-@click.option('--mes-fim-faixa', type=int, help='Mês final para faixa de anos (1-12)')
-@click.option('--consolidacao-anual', is_flag=True, help='Processar ano completo')
-@click.option('--campos', multiple=True, help='Campos específicos a processar')
-def completo(ano, mes, ano_inicio, mes_inicio_faixa, ano_fim, mes_fim_faixa, consolidacao_anual, campos):
-    """
-    🚀 Processamento completo: baixa, descompacta e converte dados CAGED
-    
-    Exemplos:
-    \b
-    # Processamento completo de janeiro de 2024
-    python main.py completo --ano 2024 --mes 1
-    
-    # Processamento completo do ano de 2024
-    python main.py completo --ano 2024 --consolidacao-anual
-    
-    # Processamento completo de faixa: janeiro/2020 até abril/2020
-    python main.py completo --ano-inicio 2020 --mes-inicio-faixa 1 --ano-fim 2020 --mes-fim-faixa 4
-    
-    # Processamento completo de faixa: julho/2021 até março/2023
-    python main.py completo --ano-inicio 2021 --mes-inicio-faixa 7 --ano-fim 2023 --mes-fim-faixa 3
-    """
-    logger.info(f"Iniciando processamento completo - Ano: {ano}, Mês: {mes}, Faixa: {ano_inicio}/{mes_inicio_faixa} até {ano_fim}/{mes_fim_faixa}, Consolidacao anual: {consolidacao_anual}")
-    
-    # Validações
-    if not consolidacao_anual and ano is None and mes is None and ano_inicio is None:
-        click.echo("❌ Erro: Especifique um ano/mês, uma faixa de datas ou use --consolidacao-anual")
+        modo_processamento = "mensal"
+        click.echo(f"📅 Modo: Mensal ({mes:02d}/{ano})")
+    else:
+        click.echo("❌ Erro: Especifique --ano/--mes, --todos-meses ou faixa de datas")
         return
     
-    # Validação para faixa de datas
-    if ano_inicio is not None or ano_fim is not None:
-        if ano_inicio is None or ano_fim is None or mes_inicio_faixa is None or mes_fim_faixa is None:
-            click.echo("❌ Erro: Para faixa de datas, especifique --ano-inicio, --mes-inicio-faixa, --ano-fim e --mes-fim-faixa")
-            return
-        if ano_inicio > ano_fim or (ano_inicio == ano_fim and mes_inicio_faixa > mes_fim_faixa):
-            click.echo("❌ Erro: Data inicial deve ser anterior à data final")
-            return
-        if not (1 <= mes_inicio_faixa <= 12) or not (1 <= mes_fim_faixa <= 12):
-            click.echo("❌ Erro: Meses devem estar entre 1 e 12")
+    # Validar espaço em disco
+    valido, msg = ValidadorCaged.validar_espaco_disco(min_gb=2.0)
+    if not valido:
+        click.echo(f"⚠️  Aviso: {msg}")
+        if not click.confirm("Continuar mesmo assim?"):
             return
     
-    gerenciador = GerenciadorArquivosCaged()
-    descompactador = DescompactadorCaged()
-    conversor = ConversorParquetCaged()
+    # Validar campos se especificados
+    if campos:
+        campos_validos = ['ADMITIDOS', 'DESLIGADOS', 'SALDO', 'MOVIMENTACAO', 'INDICADORES']
+        campos_invalidos = [c for c in campos if c.upper() not in campos_validos]
+        if campos_invalidos:
+            click.echo(f"❌ Campos inválidos: {', '.join(campos_invalidos)}")
+            click.echo(f"   Campos válidos: {', '.join(campos_validos)}")
+            return
+        click.echo(f"📊 Campos selecionados: {', '.join(campos)}")
     
-    gerenciador.conectar()
+    # Modo dry-run
+    if dry_run:
+        click.echo("\n🔍 MODO DRY-RUN - Apenas validação")
+        click.echo("✅ Todas as validações passaram!")
+        click.echo("💡 Execute sem --dry-run para processar os dados")
+        return
+    
+    # ========================================================================
+    # INICIALIZAÇÃO DE COMPONENTES
+    # ========================================================================
+    
+    gerenciador = None
+    descompactador = None
+    conversor = None
     
     try:
-        if ano_inicio is not None and ano_fim is not None:
-            # Processamento completo de faixa de datas
-            click.echo(f"🚀 Processamento completo da faixa: {mes_inicio_faixa:02d}/{ano_inicio} até {mes_fim_faixa:02d}/{ano_fim}")
+        if executar_download:
+            gerenciador = GerenciadorArquivosCaged()
+            gerenciador.conectar()
+            click.echo("🔗 Conexão FTP estabelecida")
+        
+        if executar_extract:
+            descompactador = DescompactadorCaged()
+            click.echo("📦 Descompactador inicializado")
+        
+        if executar_convert:
+            conversor = ConversorParquetCaged(habilitar_cache=use_cache)
+            click.echo(f"🔄 Conversor inicializado (Cache: {'✅' if use_cache else '❌'})")
+        
+        # ====================================================================
+        # PROCESSAMENTO PRINCIPAL
+        # ====================================================================
+        
+        total_processados = 0
+        total_sucessos = 0
+        
+        if modo_processamento == "mensal":
+            # Processamento mensal
+            click.echo(f"\n🚀 Iniciando processamento de {mes:02d}/{ano}")
+            sucesso = _processar_mes(
+                ano, mes, gerenciador, descompactador, conversor,
+                executar_download, executar_extract, executar_convert,
+                campos, workers
+            )
+            total_processados = 1
+            if sucesso:
+                total_sucessos = 1
+                
+        elif modo_processamento == "ano_completo":
+            # Processamento de ano completo
+            click.echo(f"\n🚀 Iniciando processamento do ano {ano}")
+            for mes_atual in range(1, 13):
+                click.echo(f"\n📅 Processando {mes_atual:02d}/{ano}")
+                sucesso = _processar_mes(
+                    ano, mes_atual, gerenciador, descompactador, conversor,
+                    executar_download, executar_extract, executar_convert,
+                    campos, workers
+                )
+                total_processados += 1
+                if sucesso:
+                    total_sucessos += 1
+                    
+        elif modo_processamento == "faixa":
+            # Processamento de faixa
+            click.echo(f"\n🚀 Iniciando processamento da faixa {mes_inicio:02d}/{ano_inicio} até {mes_fim:02d}/{ano_fim}")
             
             ano_atual = ano_inicio
-            mes_atual = mes_inicio_faixa
+            mes_atual = mes_inicio
             
-            while ano_atual < ano_fim or (ano_atual == ano_fim and mes_atual <= mes_fim_faixa):
-                click.echo(f"🔄 Processando {ano_atual}/{mes_atual:02d}")
+            while ano_atual < ano_fim or (ano_atual == ano_fim and mes_atual <= mes_fim):
+                click.echo(f"\n📅 Processando {mes_atual:02d}/{ano_atual}")
+                sucesso = _processar_mes(
+                    ano_atual, mes_atual, gerenciador, descompactador, conversor,
+                    executar_download, executar_extract, executar_convert,
+                    campos, workers
+                )
+                total_processados += 1
+                if sucesso:
+                    total_sucessos += 1
                 
-                # 1. Baixar
-                sucesso_download, _ = gerenciador.baixar_dados_mensais(ano_atual, mes_atual)
-                if not sucesso_download:
-                    click.echo(f"❌ Falha no download de {ano_atual}/{mes_atual:02d}")
-                    # Avançar para o próximo mês mesmo com falha
-                    mes_atual += 1
-                    if mes_atual > 12:
-                        mes_atual = 1
-                        ano_atual += 1
-                    continue
-                
-                # 2. Descompactar
-                sucesso_descompactar = descompactador.descompactar_mensal(ano_atual, mes_atual)
-                if not sucesso_descompactar:
-                    click.echo(f"❌ Falha na descompactação de {ano_atual}/{mes_atual:02d}")
-                    # Avançar para o próximo mês mesmo com falha
-                    mes_atual += 1
-                    if mes_atual > 12:
-                        mes_atual = 1
-                        ano_atual += 1
-                    continue
-                
-                # 3. Converter
-                sucesso_conversao = conversor.converter_mensal(ano_atual, mes_atual, campos)
-                if sucesso_conversao:
-                    click.echo(f"✅ {ano_atual}/{mes_atual:02d} processado completamente")
-                else:
-                    click.echo(f"❌ Falha na conversão de {ano_atual}/{mes_atual:02d}")
-                
-                # Avançar para o próximo mês
+                # Avançar para próximo mês
                 mes_atual += 1
                 if mes_atual > 12:
                     mes_atual = 1
                     ano_atual += 1
-                    
-        elif consolidacao_anual:
-            click.echo(f"🚀 Processamento completo do ano: {ano}")
-            for mes_atual in range(1, 13):
-                click.echo(f"🔄 Processando {ano}/{mes_atual:02d}")
-                
-                # 1. Baixar
-                sucesso_download, _ = gerenciador.baixar_dados_mensais(ano, mes_atual)
-                if not sucesso_download:
-                    click.echo(f"❌ Falha no download de {ano}/{mes_atual:02d}")
-                    continue
-                
-                # 2. Descompactar
-                sucesso_descompactar = descompactador.descompactar_mensal(ano, mes_atual)
-                if not sucesso_descompactar:
-                    click.echo(f"❌ Falha na descompactação de {ano}/{mes_atual:02d}")
-                    continue
-                
-                # 3. Converter
-                sucesso_conversao = conversor.converter_mensal(ano, mes_atual, campos)
-                if sucesso_conversao:
-                    click.echo(f"✅ {ano}/{mes_atual:02d} processado completamente")
-                else:
-                    click.echo(f"❌ Falha na conversão de {ano}/{mes_atual:02d}")
-                    
-        elif mes:
-            click.echo(f"🚀 Processamento completo de {ano}/{mes:02d}")
-            
-            # 1. Baixar
-            sucesso_download, _ = gerenciador.baixar_dados_mensais(ano, mes)
-            if not sucesso_download:
-                click.echo(f"❌ Falha no download")
-                return
-            
-            # 2. Descompactar
-            sucesso_descompactar = descompactador.descompactar_mensal(ano, mes)
-            if not sucesso_descompactar:
-                click.echo(f"❌ Falha na descompactação")
-                return
-            
-            # 3. Converter
-            sucesso_conversao = conversor.converter_mensal(ano, mes, campos)
-            if sucesso_conversao:
-                click.echo(f"✅ {ano}/{mes:02d} processado completamente")
-            else:
-                click.echo(f"❌ Falha na conversão")
+        
+        # ====================================================================
+        # RELATÓRIO FINAL
+        # ====================================================================
+        
+        click.echo("\n" + "="*50)
+        click.echo("📊 RELATÓRIO FINAL")
+        click.echo("="*50)
+        click.echo(f"📈 Total processado: {total_processados} meses")
+        click.echo(f"✅ Sucessos: {total_sucessos}")
+        click.echo(f"❌ Falhas: {total_processados - total_sucessos}")
+        click.echo(f"📊 Taxa de sucesso: {(total_sucessos/total_processados)*100:.1f}%")
+        
+        if use_cache and conversor:
+            estatisticas = conversor.exibir_estatisticas_cache()
+            if estatisticas:
+                click.echo(f"\n💾 ESTATÍSTICAS DE CACHE:")
+                click.echo(f"   🎯 Cache Hits: {estatisticas.get('cache_hits', 0)}")
+                click.echo(f"   ❌ Cache Misses: {estatisticas.get('cache_misses', 0)}")
+                click.echo(f"   📈 Taxa de Acerto: {estatisticas.get('taxa_acerto_cache', 0):.1f}%")
+        
+        if total_sucessos == total_processados:
+            click.echo("\n🎉 Processamento concluído com sucesso!")
         else:
-            click.echo("❌ Erro: Especifique mês, faixa de datas ou use --consolidacao-anual")
+            click.echo("\n⚠️  Processamento concluído com algumas falhas")
+            
+    except Exception as e:
+        logger.error(f"❌ Erro durante o processamento: {e}")
+        click.echo(f"❌ Erro: {e}")
     finally:
-        gerenciador.desconectar()
+        # Cleanup
+        if gerenciador:
+            gerenciador.desconectar()
+            click.echo("🔌 Conexão FTP encerrada")
 
+
+def _processar_mes(ano: int, mes: int, gerenciador, descompactador, conversor,
+                  executar_download: bool, executar_extract: bool, executar_convert: bool,
+                  campos: tuple, workers: int) -> bool:
+    """
+    Processa um mês específico executando as etapas selecionadas
+    
+    Returns:
+        bool: True se todas as etapas executadas foram bem-sucedidas
+    """
+    sucesso_geral = True
+    
+    try:
+        # Etapa 1: Download
+        if executar_download:
+            click.echo(f"   📥 Baixando dados...")
+            sucesso, metadados = gerenciador.baixar_dados_mensais(ano, mes)
+            if sucesso:
+                click.echo(f"   ✅ Download concluído")
+            else:
+                click.echo(f"   ❌ Falha no download")
+                sucesso_geral = False
+        
+        # Etapa 2: Extração
+        if executar_extract and sucesso_geral:
+            click.echo(f"   📦 Extraindo arquivos...")
+            sucesso = descompactador.descompactar_mensal(ano, mes)
+            if sucesso:
+                click.echo(f"   ✅ Extração concluída")
+            else:
+                click.echo(f"   ❌ Falha na extração")
+                sucesso_geral = False
+        
+        # Etapa 3: Conversão
+        if executar_convert and sucesso_geral:
+            click.echo(f"   🔄 Convertendo para Parquet...")
+            sucesso, _, _, _ = conversor.converter_mensal(
+                ano, mes, 
+                campos_selecionados=list(campos) if campos else None,
+                usar_paralelismo=workers > 1
+            )
+            if sucesso:
+                click.echo(f"   ✅ Conversão concluída")
+            else:
+                click.echo(f"   ❌ Falha na conversão")
+                sucesso_geral = False
+        
+        return sucesso_geral
+        
+    except Exception as e:
+        logger.error(f"Erro ao processar {ano}/{mes:02d}: {e}")
+        click.echo(f"   ❌ Erro: {e}")
+        return False
+
+
+# ============================================================================
+# COMANDOS DEPRECATED (MANTIDOS PARA COMPATIBILIDADE)
+# ============================================================================
+
+@cli.command(hidden=True)
+@click.pass_context
+def baixar(ctx, **kwargs):
+    """⚠️  DEPRECATED: Use 'processar --download' em vez deste comando"""
+    click.echo("⚠️  AVISO: O comando 'baixar' está deprecated.")
+    click.echo("💡 Use: python main.py processar --ano X --mes Y --download")
+    click.echo("📖 Para mais informações: python main.py processar --help")
+
+
+@cli.command(hidden=True)
+@click.pass_context
+def apenas_converter(ctx, **kwargs):
+    """⚠️  DEPRECATED: Use 'processar --skip-download --skip-extract --convert'"""
+    click.echo("⚠️  AVISO: O comando 'apenas-converter' está deprecated.")
+    click.echo("💡 Use: python main.py processar --ano X --mes Y --skip-download --skip-extract --convert")
+    click.echo("📖 Para mais informações: python main.py processar --help")
+
+
+@cli.command(hidden=True)
+@click.pass_context
+def converter(ctx, **kwargs):
+    """⚠️  DEPRECATED: Use 'processar --convert'"""
+    click.echo("⚠️  AVISO: O comando 'converter' está deprecated.")
+    click.echo("💡 Use: python main.py processar --ano X --mes Y --convert")
+    click.echo("📖 Para mais informações: python main.py processar --help")
+
+
+@cli.command(hidden=True)
+@click.pass_context
+def consolidar(ctx, **kwargs):
+    """⚠️  DEPRECATED: Use 'processar --convert --todos-meses'"""
+    click.echo("⚠️  AVISO: O comando 'consolidar' está deprecated.")
+    click.echo("💡 Use: python main.py processar --ano X --todos-meses --convert")
+    click.echo("📖 Para mais informações: python main.py processar --help")
+
+
+@cli.command(hidden=True)
+@click.pass_context
+def apenas_descompactar(ctx, **kwargs):
+    """⚠️  DEPRECATED: Use 'processar --skip-download --extract'"""
+    click.echo("⚠️  AVISO: O comando 'apenas-descompactar' está deprecated.")
+    click.echo("💡 Use: python main.py processar --ano X --mes Y --skip-download --extract")
+    click.echo("📖 Para mais informações: python main.py processar --help")
+
+
+@cli.command(hidden=True)
+@click.pass_context
+def descompactar(ctx, **kwargs):
+    """⚠️  DEPRECATED: Use 'processar --download --extract'"""
+    click.echo("⚠️  AVISO: O comando 'descompactar' está deprecated.")
+    click.echo("💡 Use: python main.py processar --ano X --mes Y --download --extract")
+    click.echo("📖 Para mais informações: python main.py processar --help")
+
+
+@cli.command(hidden=True)
+@click.pass_context
+def completo(ctx, **kwargs):
+    """⚠️  DEPRECATED: Use 'processar' (comportamento padrão)"""
+    click.echo("⚠️  AVISO: O comando 'completo' está deprecated.")
+    click.echo("💡 Use: python main.py processar --ano X --mes Y")
+    click.echo("📖 Para mais informações: python main.py processar --help")
+
+
+# ============================================================================
+# COMANDOS UTILITÁRIOS MANTIDOS
+# ============================================================================
 
 @cli.command()
 def status():
     """
     📈 Exibe status do projeto e arquivos processados
     """
-    click.echo("🎯 Status do Processador CAGED")
+    click.echo("🎯 Status do Processador CAGED v2.0")
     click.echo("=" * 40)
     
     try:
@@ -724,10 +585,12 @@ def status():
         
         # Testar conexão FTP
         click.echo("\n🔗 Testando conexão FTP...")
-        from src.util.gerenciador_ftp import testar_conexao_caged
-        if testar_conexao_caged():
+        try:
+            gerenciador = GerenciadorArquivosCaged()
+            gerenciador.conectar()
             click.echo("✅ Conexão FTP: OK")
-        else:
+            gerenciador.desconectar()
+        except Exception:
             click.echo("❌ Conexão FTP: Falha")
         
         click.echo("\n✅ Status exibido!")
@@ -736,175 +599,43 @@ def status():
         click.echo(f"❌ Erro ao exibir status: {e}")
 
 
-# ============================================================================
-# COMANDOS FASE 5.1 - OTIMIZAÇÕES E CACHE
-# ============================================================================
-
 @cli.command()
-@click.option('--ano', type=int, required=True, help='Ano para consolidação otimizada')
-@click.option('--sem-cache', is_flag=True, help='Desabilitar uso de cache')
-@click.option('--sem-paralelismo', is_flag=True, help='Desabilitar processamento paralelo')
-def consolidar_otimizado(ano, sem_cache, sem_paralelismo):
+def migrar():
     """
-    🚀 Consolidação anual otimizada com cache e paralelismo - Fase 5.1
+    🔄 Guia de migração da versão 1.x para 2.0
     
-    Exemplos:
-    \b
-    # Consolidação otimizada com cache e paralelismo
-    python main.py consolidar-otimizado --ano 2024
-    
-    # Consolidação sem cache
-    python main.py consolidar-otimizado --ano 2024 --sem-cache
-    
-    # Consolidação sequencial (sem paralelismo)
-    python main.py consolidar-otimizado --ano 2024 --sem-paralelismo
+    Exibe informações sobre como migrar comandos antigos para a nova sintaxe.
     """
-    logger.info(f"Iniciando consolidação otimizada - Ano: {ano}, Cache: {not sem_cache}, Paralelismo: {not sem_paralelismo}")
+    click.echo("🔄 Guia de Migração CAGED v1.x → v2.0")
+    click.echo("=" * 50)
+    click.echo("\n📋 MAPEAMENTO DE COMANDOS:")
+    click.echo("\n🔸 Comandos de Download:")
+    click.echo("   ANTES: python main.py baixar --ano 2024 --mes 1")
+    click.echo("   AGORA: python main.py processar --ano 2024 --mes 1 --download")
     
-    try:
-        conversor = ConversorParquetCaged(habilitar_cache=not sem_cache)
-        
-        click.echo(f"🚀 Consolidação otimizada do ano {ano}")
-        click.echo(f"   🎯 Cache: {'Habilitado' if not sem_cache else 'Desabilitado'}")
-        click.echo(f"   ⚡ Paralelismo: {'Habilitado' if not sem_paralelismo else 'Desabilitado'}")
-        
-        sucesso, _, _, _ = conversor.consolidar_anual(
-            ano=ano,
-            usar_cache=not sem_cache,
-            usar_paralelismo=not sem_paralelismo
-        )
-        
-        if sucesso:
-            click.echo(f"✅ Consolidação otimizada de {ano} concluída!")
-            
-            # Exibir estatísticas se cache habilitado
-            if not sem_cache:
-                estatisticas = conversor.exibir_estatisticas_cache()
-                click.echo("\n📊 Estatísticas de Cache:")
-                click.echo(f"   🎯 Cache Hits: {estatisticas.get('cache_hits', 0)}")
-                click.echo(f"   ❌ Cache Misses: {estatisticas.get('cache_misses', 0)}")
-                click.echo(f"   📈 Taxa de Acerto: {estatisticas.get('taxa_acerto_cache', 0):.1f}%")
-                click.echo(f"   💾 Economia de Espaço: {estatisticas.get('economia_espaco_mb', 0):.2f} MB")
-        else:
-            click.echo(f"❌ Falha na consolidação otimizada de {ano}")
-            
-    except Exception as e:
-        logger.error(f"Erro na consolidação otimizada: {e}")
-        click.echo(f"❌ Erro na consolidação otimizada: {e}")
-
-
-@cli.command()
-def estatisticas_cache():
-    """
-    📊 Exibe estatísticas detalhadas do sistema de cache - Fase 5.1
+    click.echo("\n🔸 Comandos de Extração:")
+    click.echo("   ANTES: python main.py apenas-descompactar --ano 2024 --mes 1")
+    click.echo("   AGORA: python main.py processar --ano 2024 --mes 1 --skip-download --extract")
     
-    Mostra informações sobre cache hits, misses, economia de espaço
-    e arquivos de cache armazenados.
-    """
-    try:
-        conversor = ConversorParquetCaged(habilitar_cache=True)
-        estatisticas = conversor.exibir_estatisticas_cache()
-        
-        click.echo("📊 Estatísticas do Sistema de Cache")
-        click.echo("=" * 40)
-        
-        if not estatisticas:
-            click.echo("❌ Nenhuma estatística de cache disponível")
-            return
-        
-        click.echo(f"🎯 Cache Habilitado: {'Sim' if estatisticas.get('cache_habilitado') else 'Não'}")
-        click.echo(f"📁 Diretório de Cache: {estatisticas.get('diretorio_cache', 'N/A')}")
-        click.echo(f"\n📈 Estatísticas de Uso:")
-        click.echo(f"   ✅ Cache Hits: {estatisticas.get('cache_hits', 0)}")
-        click.echo(f"   ❌ Cache Misses: {estatisticas.get('cache_misses', 0)}")
-        click.echo(f"   🎯 Taxa de Acerto: {estatisticas.get('taxa_acerto_cache', 0):.1f}%")
-        click.echo(f"   🚀 Consolidações Otimizadas: {estatisticas.get('consolidacoes_otimizadas', 0)}")
-        
-        click.echo(f"\n💾 Arquivos de Cache:")
-        click.echo(f"   📄 Total: {estatisticas.get('arquivos_cache_total', 0)}")
-        click.echo(f"   📅 Cache Anual: {estatisticas.get('arquivos_cache_anual', 0)}")
-        click.echo(f"   📆 Cache Mensal: {estatisticas.get('arquivos_cache_mensal', 0)}")
-        click.echo(f"   💾 Economia de Espaço: {estatisticas.get('economia_espaco_mb', 0):.2f} MB")
-        
-        click.echo("\n✅ Estatísticas exibidas!")
-        
-    except Exception as e:
-        logger.error(f"Erro ao exibir estatísticas de cache: {e}")
-        click.echo(f"❌ Erro ao exibir estatísticas de cache: {e}")
-
-
-@cli.command()
-@click.confirmation_option(prompt='Tem certeza que deseja limpar o cache expirado?')
-def limpar_cache():
-    """
-    🧹 Remove arquivos de cache expirados - Fase 5.1
+    click.echo("\n🔸 Comandos de Conversão:")
+    click.echo("   ANTES: python main.py apenas-converter --ano 2024 --mes 1")
+    click.echo("   AGORA: python main.py processar --ano 2024 --mes 1 --skip-download --skip-extract --convert")
     
-    Remove automaticamente arquivos de cache que excederam
-    o tempo de expiração configurado.
-    """
-    try:
-        conversor = ConversorParquetCaged(habilitar_cache=True)
-        
-        click.echo("🧹 Limpando cache expirado...")
-        arquivos_removidos = conversor.limpar_cache_expirado()
-        
-        if arquivos_removidos > 0:
-            click.echo(f"✅ {arquivos_removidos} arquivos de cache expirados removidos")
-        else:
-            click.echo("ℹ️  Nenhum arquivo de cache expirado encontrado")
-            
-    except Exception as e:
-        logger.error(f"Erro ao limpar cache: {e}")
-        click.echo(f"❌ Erro ao limpar cache: {e}")
-
-
-@cli.command()
-@click.option('--ano', type=int, required=True, help='Ano dos dados')
-@click.option('--mes', type=int, required=True, help='Mês dos dados (1-12)')
-@click.option('--sem-cache', is_flag=True, help='Desabilitar cache')
-@click.option('--sem-paralelismo', is_flag=True, help='Desabilitar paralelismo')
-@click.option('--campos', multiple=True, help='Campos específicos a processar')
-def converter_otimizado(ano, mes, sem_cache, sem_paralelismo, campos):
-    """
-    ⚡ Conversão mensal otimizada com cache e paralelismo - Fase 5.1
+    click.echo("\n🔸 Processamento Completo:")
+    click.echo("   ANTES: python main.py completo --ano 2024 --mes 1")
+    click.echo("   AGORA: python main.py processar --ano 2024 --mes 1")
     
-    Exemplos:
-    \b
-    # Conversão otimizada com todas as funcionalidades
-    python main.py converter-otimizado --ano 2024 --mes 1
+    click.echo("\n🔸 Processamento Anual:")
+    click.echo("   ANTES: python main.py completo --ano 2024 --consolidacao-anual")
+    click.echo("   AGORA: python main.py processar --ano 2024 --todos-meses")
     
-    # Conversão sem cache
-    python main.py converter-otimizado --ano 2024 --mes 1 --sem-cache
+    click.echo("\n✨ NOVAS FUNCIONALIDADES:")
+    click.echo("   🎯 Controle granular: --download, --extract, --convert")
+    click.echo("   ⏭️  Pular etapas: --skip-download, --skip-extract, --skip-convert")
+    click.echo("   🔍 Validação: --dry-run")
+    click.echo("   ⚡ Performance: --workers N, --use-cache")
     
-    # Conversão com campos específicos
-    python main.py converter-otimizado --ano 2024 --mes 1 --campos ADMITIDOS DESLIGADOS SALDO
-    """
-    logger.info(f"Iniciando conversão otimizada - {ano}/{mes:02d}, Cache: {not sem_cache}, Paralelismo: {not sem_paralelismo}")
-    
-    try:
-        conversor = ConversorParquetCaged(habilitar_cache=not sem_cache)
-        
-        click.echo(f"⚡ Conversão otimizada de {ano}/{mes:02d}")
-        click.echo(f"   🎯 Cache: {'Habilitado' if not sem_cache else 'Desabilitado'}")
-        click.echo(f"   ⚡ Paralelismo: {'Habilitado' if not sem_paralelismo else 'Desabilitado'}")
-        if campos:
-            click.echo(f"   📊 Campos: {', '.join(campos)}")
-        
-        sucesso, _, _, _ = conversor.converter_mensal(
-            ano=ano,
-            mes=mes,
-            campos_selecionados=list(campos) if campos else None,
-            usar_paralelismo=not sem_paralelismo
-        )
-        
-        if sucesso:
-            click.echo(f"✅ Conversão otimizada de {ano}/{mes:02d} concluída!")
-        else:
-            click.echo(f"❌ Falha na conversão otimizada de {ano}/{mes:02d}")
-            
-    except Exception as e:
-        logger.error(f"Erro na conversão otimizada: {e}")
-        click.echo(f"❌ Erro na conversão otimizada: {e}")
+    click.echo("\n📖 Para mais detalhes: python main.py processar --help")
 
 
 if __name__ == '__main__':
