@@ -37,7 +37,7 @@ class TestRunner:
     """Executor de testes automatizados"""
     
     def __init__(self):
-        self.project_root = Path(__file__).parent
+        self.project_root = Path(__file__).parent.parent  # Subir um nível da pasta tests para a raiz
         self.test_dir = self.project_root / "tests"
         self.reports_dir = self.project_root / "test_reports"
         
@@ -185,6 +185,7 @@ class TestRunner:
             subprocess.run(["pip", "install", "flake8"], 
                          capture_output=True, check=False)
             
+
             flake8_cmd = [
                 "flake8", "src", "tests",
                 "--output-file=test_reports/flake8_report.txt",
