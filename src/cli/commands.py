@@ -14,11 +14,16 @@ from typing import List, Optional
 # Adicionar src ao path para imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from src.core.config import ConfigManager
-from src.core.pipeline import CAGEDPipeline, ProcessingStage, create_pipeline
-from src.core.exceptions import CAGEDException, ValidationError
-from src.utils.validators import CAGEDValidator
-from src.utils.logger import setup_logger
+from ..core.config import ConfigManager
+from ..core.pipeline import CAGEDPipeline, ProcessingStage, create_pipeline
+from ..core.exceptions import CAGEDException, ValidationError
+from ..core.recovery import (
+    RecoveryManager, OperationType, OperationStatus,
+    create_checkpoint, update_checkpoint, complete_checkpoint,
+    can_resume_operation, get_recovery_manager
+)
+from ..utils.validators import CAGEDValidator
+from ..utils.logger import setup_logger
 
 
 def configurar_logging(nivel: str = "WARNING", usar_emojis: bool = True, enable_json: bool = False):
@@ -93,10 +98,11 @@ def cli(ctx, config, profile, debug):
 @click.option('--dry-run', is_flag=True, help='Apenas validar, não executar')
 @click.option('--workers', type=int, help='Número de workers paralelos')
 @click.option('--use-cache', is_flag=True, help='Usar sistema de cache')
+@click.option('--resume', is_flag=True, help='Retomar operação interrompida')
 @click.pass_context
 def processar(ctx, ano, mes, ano_inicio, mes_inicio, ano_fim, mes_fim, todos_meses,
              download, extract, convert, skip_download, skip_extract, skip_convert,
-             campos, dry_run, workers, use_cache):
+             campos, dry_run, workers, use_cache, resume):
     """
     🔄 Comando Unificado de Processamento
     
@@ -146,6 +152,58 @@ def processar(ctx, ano, mes, ano_inicio, mes_inicio, ano_fim, mes_fim, todos_mes
             config.processing.max_workers = workers
         if use_cache is not None:
             config.cache.enabled = use_cache
+        
+        # Verificar se há operações que podem ser retomadas
+        recovery_manager = RecoveryManager()
+        
+        if resume:
+            # Listar operações que podem ser retomadas
+            failed_checkpoints = recovery_manager.list_failed_checkpoints()
+            active_checkpoints = recovery_manager.list_active_checkpoints()
+            
+            resumable_checkpoints = failed_checkpoints + active_checkpoints
+            
+            if not resumable_checkpoints:
+                click.echo("ℹ️ Nenhuma operação encontrada para retomar")
+                return
+            
+            click.echo("🔄 Operações disponíveis para retomar:")
+            for i, checkpoint in enumerate(resumable_checkpoints, 1):
+                status_emoji = "⚠️" if checkpoint.status == OperationStatus.FAILED else "⏸️"
+                click.echo(f"  {i}. {status_emoji} {checkpoint.operation_id} - {checkpoint.operation_type.value}")
+                click.echo(f"     📅 {checkpoint.metadata.get('ano', 'N/A')}/{checkpoint.metadata.get('mes', 'N/A')}")
+                click.echo(f"     📊 Progresso: {checkpoint.progress:.1%}")
+                click.echo(f"     🕒 Última atualização: {checkpoint.last_update.strftime('%d/%m/%Y %H:%M')}")
+                if checkpoint.error_info:
+                    click.echo(f"     ❌ Erro: {checkpoint.error_info.get('error', 'Desconhecido')}")
+                click.echo()
+            
+            # Permitir seleção da operação para retomar
+            choice = click.prompt(
+                "Escolha a operação para retomar (número)",
+                type=click.IntRange(1, len(resumable_checkpoints))
+            )
+            
+            selected_checkpoint = resumable_checkpoints[choice - 1]
+            
+            # Configurar parâmetros baseados no checkpoint
+            metadata = selected_checkpoint.metadata
+            ano = metadata.get('ano')
+            mes = metadata.get('mes')
+            ano_inicio = metadata.get('ano_inicio')
+            mes_inicio = metadata.get('mes_inicio')
+            ano_fim = metadata.get('ano_fim')
+            mes_fim = metadata.get('mes_fim')
+            
+            click.echo(f"🔄 Retomando operação: {selected_checkpoint.operation_id}")
+            click.echo(f"📊 Progresso atual: {selected_checkpoint.progress:.1%}")
+            
+            # Marcar como em execução novamente
+            update_checkpoint(
+                selected_checkpoint.operation_id,
+                status=OperationStatus.RUNNING,
+                current_step="Retomando operação"
+            )
         
         # Determinar etapas de processamento
         stages = _determine_processing_stages(
@@ -212,8 +270,68 @@ def processar(ctx, ano, mes, ano_inicio, mes_inicio, ano_fim, mes_fim, todos_mes
         # Registrar handlers (implementação futura)
         # _register_pipeline_handlers(pipeline, config)
         
+        # Criar checkpoint para a operação
+        operation_metadata = {
+            'ano': ano,
+            'mes': mes,
+            'ano_inicio': ano_inicio,
+            'mes_inicio': mes_inicio,
+            'ano_fim': ano_fim,
+            'mes_fim': mes_fim,
+            'todos_meses': todos_meses,
+            'stages': [s.value for s in stages],
+            'total_items': len(items),
+            'use_cache': use_cache,
+            'workers': workers
+        }
+        
+        # Determinar tipo de operação
+        if len(stages) == 1:
+            if ProcessingStage.DOWNLOAD in stages:
+                operation_type = OperationType.DOWNLOAD
+            elif ProcessingStage.EXTRACT in stages:
+                operation_type = OperationType.EXTRACT
+            elif ProcessingStage.CONVERT in stages:
+                operation_type = OperationType.CONVERT
+            else:
+                operation_type = OperationType.FULL_PIPELINE
+        else:
+            operation_type = OperationType.FULL_PIPELINE
+        
+        # Verificar se já existe checkpoint para esta operação
+        existing_checkpoint = None
+        if not resume:
+            existing_checkpoint = recovery_manager.get_checkpoint(operation_type, operation_metadata)
+            if existing_checkpoint and existing_checkpoint.status in [OperationStatus.RUNNING, OperationStatus.FAILED]:
+                click.echo(f"⚠️ Operação similar já existe: {existing_checkpoint.operation_id}")
+                click.echo(f"📊 Progresso: {existing_checkpoint.progress:.1%}")
+                click.echo(f"🕒 Última atualização: {existing_checkpoint.last_update.strftime('%d/%m/%Y %H:%M')}")
+                
+                if click.confirm("Deseja retomar esta operação?"):
+                    resume = True
+                    update_checkpoint(
+                        existing_checkpoint.operation_id,
+                        status=OperationStatus.RUNNING,
+                        current_step="Retomando operação"
+                    )
+                else:
+                    # Limpar checkpoint antigo
+                    recovery_manager.clear_checkpoint(existing_checkpoint.operation_id)
+                    existing_checkpoint = None
+        
+        # Criar novo checkpoint se necessário
+        if not existing_checkpoint:
+            operation_id = create_checkpoint(
+                operation_type,
+                operation_metadata,
+                total_steps=len(items) * len(stages)
+            )
+        else:
+            operation_id = existing_checkpoint.operation_id
+        
         # Executar processamento
         click.echo(f"\n🚀 Iniciando processamento de {len(items)} item(s)...")
+        click.echo(f"🆔 ID da operação: {operation_id}")
         
         # Executar pipeline real
         try:
@@ -230,12 +348,26 @@ def processar(ctx, ano, mes, ano_inicio, mes_inicio, ano_fim, mes_fim, todos_mes
                 current_progress = int(progress * 100)
                 progress_bar.update(current_progress - progress_bar.pos)
                 
+                # Atualizar checkpoint
+                stage_name = stage.value if stage else "processando"
+                update_checkpoint(
+                    operation_id,
+                    progress=progress,
+                    current_step=f"{item.id} - {stage_name}",
+                    status=OperationStatus.RUNNING
+                )
+                
                 # Log detalhado se debug
                 if ctx.obj['debug']:
-                    stage_name = stage.value if stage else "geral"
                     click.echo(f"\n🔄 {item.id} - {stage_name}: {progress:.1%}")
             
             def error_callback(item, error):
+                # Atualizar checkpoint com erro
+                update_checkpoint(
+                    operation_id,
+                    status=OperationStatus.FAILED,
+                    current_step=f"Erro em {item.id}"
+                )
                 click.echo(f"\n❌ Erro em {item.id}: {error}", err=True)
             
             # Configurar pipeline com callbacks
@@ -274,12 +406,33 @@ def processar(ctx, ano, mes, ano_inicio, mes_inicio, ano_fim, mes_fim, todos_mes
                 progress_bar.__exit__(None, None, None)
                 click.echo()  # Nova linha
             
+            # Marcar checkpoint como concluído
+            complete_checkpoint(operation_id)
+            
             # Exibir resultados
             _display_processing_results(results, logger)
+            
+            click.echo(f"\n✅ Processamento concluído com sucesso!")
+            click.echo(f"🆔 Operação {operation_id} finalizada")
             
         except Exception as e:
             if progress_bar:
                 progress_bar.__exit__(None, None, None)
+            
+            # Marcar checkpoint como falhou
+            update_checkpoint(
+                operation_id,
+                status=OperationStatus.FAILED,
+                current_step=f"Erro: {str(e)}"
+            )
+            
+            click.echo(f"\n❌ Erro durante processamento: {e}", err=True)
+            click.echo(f"🆔 Operação {operation_id} falhou - use --resume para retomar")
+            
+            if ctx.obj['debug']:
+                import traceback
+                click.echo(traceback.format_exc(), err=True)
+            
             raise
         
     except CAGEDException as e:
@@ -754,6 +907,171 @@ def _estimate_processing_time(items, stages, config) -> str:
         total_estimated_seconds *= (1 - parallel_factor * 0.7)  # 70% de eficiência paralela
     
     return _format_duration(total_estimated_seconds)
+
+
+# Comandos de Recovery
+@cli.command()
+@click.option('--status', type=click.Choice(['running', 'failed', 'completed', 'all']), default='all',
+              help='Filtrar por status')
+@click.option('--operation-type', type=click.Choice(['download', 'extract', 'convert', 'full_pipeline', 'all']), 
+              default='all', help='Filtrar por tipo de operação')
+def recovery_list(status, operation_type):
+    """
+    📋 Lista checkpoints de recovery
+    """
+    try:
+        recovery_manager = RecoveryManager()
+        
+        # Converter filtros
+        status_filter = None if status == 'all' else OperationStatus[status.upper()]
+        type_filter = None if operation_type == 'all' else OperationType[operation_type.upper()]
+        
+        checkpoints = recovery_manager.list_checkpoints(status_filter, type_filter)
+        
+        if not checkpoints:
+            click.echo("📋 Nenhum checkpoint encontrado.")
+            return
+        
+        click.echo(f"📋 Checkpoints encontrados ({len(checkpoints)}):")
+        click.echo()
+        
+        for checkpoint in checkpoints:
+            status_icon = {
+                OperationStatus.RUNNING: "🔄",
+                OperationStatus.COMPLETED: "✅",
+                OperationStatus.FAILED: "❌",
+                OperationStatus.PENDING: "⏳"
+            }.get(checkpoint.status, "❓")
+            
+            type_icon = {
+                OperationType.DOWNLOAD: "⬇️",
+                OperationType.EXTRACT: "📦",
+                OperationType.CONVERT: "🔄",
+                OperationType.FULL_PIPELINE: "🚀"
+            }.get(checkpoint.operation_type, "❓")
+            
+            click.echo(f"{status_icon} {type_icon} {checkpoint.operation_id}")
+            click.echo(f"   📊 Progresso: {checkpoint.progress:.1%}")
+            click.echo(f"   🕒 Criado: {checkpoint.start_time.strftime('%d/%m/%Y %H:%M')}")
+            click.echo(f"   🔄 Atualizado: {checkpoint.last_update.strftime('%d/%m/%Y %H:%M')}")
+            if checkpoint.current_step:
+                click.echo(f"   📝 Etapa: {checkpoint.current_step}")
+            click.echo()
+            
+    except Exception as e:
+        click.echo(f"❌ Erro ao listar checkpoints: {e}", err=True)
+        sys.exit(1)
+
+
+@cli.command()
+@click.argument('operation_id', required=False)
+@click.option('--all', 'clear_all', is_flag=True, help='Limpar todos os checkpoints')
+@click.option('--status', type=click.Choice(['failed', 'completed']), 
+              help='Limpar apenas checkpoints com status específico')
+@click.option('--force', is_flag=True, help='Não pedir confirmação')
+def recovery_clear(operation_id, clear_all, status, force):
+    """
+    🧹 Limpa checkpoints de recovery
+    """
+    try:
+        recovery_manager = RecoveryManager()
+        
+        if operation_id:
+            # Limpar checkpoint específico
+            if not force and not click.confirm(f"Deseja limpar o checkpoint {operation_id}?"):
+                click.echo("❌ Operação cancelada.")
+                return
+            
+            if recovery_manager.clear_checkpoint(operation_id):
+                click.echo(f"✅ Checkpoint {operation_id} removido.")
+            else:
+                click.echo(f"❌ Checkpoint {operation_id} não encontrado.")
+                
+        elif clear_all:
+            # Limpar todos os checkpoints
+            if not force and not click.confirm("Deseja limpar TODOS os checkpoints?"):
+                click.echo("❌ Operação cancelada.")
+                return
+            
+            count = recovery_manager.clear_all_checkpoints()
+            click.echo(f"✅ {count} checkpoint(s) removido(s).")
+            
+        elif status:
+            # Limpar por status
+            status_filter = OperationStatus[status.upper()]
+            if not force and not click.confirm(f"Deseja limpar todos os checkpoints com status '{status}'?"):
+                click.echo("❌ Operação cancelada.")
+                return
+            
+            count = recovery_manager.clear_checkpoints_by_status(status_filter)
+            click.echo(f"✅ {count} checkpoint(s) com status '{status}' removido(s).")
+            
+        else:
+            click.echo("❌ Especifique um operation_id, --all ou --status")
+            
+    except Exception as e:
+        click.echo(f"❌ Erro ao limpar checkpoints: {e}", err=True)
+        sys.exit(1)
+
+
+@cli.command()
+@click.argument('operation_id')
+def recovery_info(operation_id):
+    """
+    ℹ️ Mostra informações detalhadas de um checkpoint
+    """
+    try:
+        recovery_manager = get_recovery_manager()
+        checkpoint = recovery_manager.get_checkpoint_by_id(operation_id)
+        
+        if not checkpoint:
+            click.echo(f"❌ Checkpoint {operation_id} não encontrado.")
+            return
+        
+        status_icon = {
+            OperationStatus.RUNNING: "🔄",
+            OperationStatus.COMPLETED: "✅",
+            OperationStatus.FAILED: "❌",
+            OperationStatus.PENDING: "⏳"
+        }.get(checkpoint.status, "❓")
+        
+        type_icon = {
+            OperationType.DOWNLOAD: "⬇️",
+            OperationType.EXTRACT: "📦",
+            OperationType.CONVERT: "🔄",
+            OperationType.FULL_PIPELINE: "🚀"
+        }.get(checkpoint.operation_type, "❓")
+        
+        click.echo(f"📋 Informações do Checkpoint")
+        click.echo(f"🆔 ID: {checkpoint.operation_id}")
+        click.echo(f"{status_icon} Status: {checkpoint.status.value}")
+        click.echo(f"{type_icon} Tipo: {checkpoint.operation_type.value}")
+        click.echo(f"📊 Progresso: {checkpoint.progress:.1%}")
+        click.echo(f"🕒 Criado: {checkpoint.start_time.strftime('%d/%m/%Y %H:%M:%S')}")
+        click.echo(f"🔄 Atualizado: {checkpoint.last_update.strftime('%d/%m/%Y %H:%M:%S')}")
+        
+        if checkpoint.current_step:
+            click.echo(f"📝 Etapa atual: {checkpoint.current_step}")
+        
+        if checkpoint.total_steps:
+            completed_steps = int(checkpoint.progress * checkpoint.total_steps)
+            click.echo(f"📈 Etapas: {completed_steps}/{checkpoint.total_steps}")
+        
+        if checkpoint.metadata:
+            click.echo(f"\n📋 Metadados:")
+            for key, value in checkpoint.metadata.items():
+                if isinstance(value, list):
+                    value = ', '.join(str(v) for v in value)
+                click.echo(f"   {key}: {value}")
+        
+        if checkpoint.error_info:
+            click.echo(f"\n❌ Informações do Erro:")
+            for key, value in checkpoint.error_info.items():
+                click.echo(f"   {key}: {value}")
+                
+    except Exception as e:
+        click.echo(f"❌ Erro ao obter informações: {e}", err=True)
+        sys.exit(1)
 
 
 if __name__ == '__main__':

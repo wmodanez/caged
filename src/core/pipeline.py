@@ -18,10 +18,10 @@ from typing import List, Optional, Dict, Any, Callable, Union, Coroutine
 from enum import Enum
 from contextlib import asynccontextmanager
 
-from core.config import CAGEDConfig, get_config
-from core.exceptions import PipelineError, ValidationError
-from utils.logger import setup_logger
-from utils.cache import cache_manager
+from .config import CAGEDConfig, get_config
+from .exceptions import PipelineError, ValidationError
+from ..utils.logger import setup_logger
+from ..utils.cache import cache_manager
 
 
 class ProcessingStage(Enum):

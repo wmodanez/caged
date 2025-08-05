@@ -18,7 +18,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Union, Any
 
-from utils.logger import setup_logger
+from .logger import setup_logger
 
 logger = setup_logger(__name__)
 

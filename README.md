@@ -14,6 +14,7 @@ Sistema automatizado para download, processamento e consolidação de dados mens
 - **🔧 Pipeline Avançado**: Sistema de processamento com estágios configuráveis
 - **💾 Cache Inteligente**: Sistema de cache com verificação de integridade e expiração automática
 - **🔍 Validação Robusta**: Sistema de validação abrangente com testes automatizados
+- **🔄 Sistema de Recovery**: Checkpoints automáticos e recuperação de falhas
 
 ## 📋 Requisitos
 
@@ -103,6 +104,30 @@ python main.py cache-clear
 python main.py cache-stats
 ```
 
+### 🔄 Sistema de Recovery
+```bash
+# Listar checkpoints de recovery
+python main.py recovery-list
+
+# Listar apenas checkpoints falhos
+python main.py recovery-list --status failed
+
+# Listar checkpoints por tipo de operação
+python main.py recovery-list --operation-type download
+
+# Ver detalhes de um checkpoint específico
+python main.py recovery-info [OPERATION_ID]
+
+# Limpar checkpoints concluídos
+python main.py recovery-clear --status completed --force
+
+# Limpar todos os checkpoints
+python main.py recovery-clear --all --force
+
+# Limpar checkpoint específico
+python main.py recovery-clear [OPERATION_ID] --force
+```
+
 ## 🏗️ Arquitetura
 
 ### 🎯 Benefícios da Arquitetura
@@ -115,15 +140,17 @@ python main.py cache-stats
 - **🎛️ CLI Unificada**: Interface simplificada e intuitiva
 - **💾 Cache Inteligente**: Otimização automática com verificação de integridade
 - **🔍 Validação Robusta**: Sistema de validação com 26+ testes automatizados
+- **🔄 Sistema de Recovery**: Checkpoints automáticos e recuperação de falhas
 
 ### 📦 Componentes Principais
 
-- **Core**: Configuração, exceções e pipeline principal
+- **Core**: Configuração, exceções, pipeline principal e sistema de recovery
 - **Services**: Serviços de FTP, extração e conversão
 - **Entities**: Modelos de dados do CAGED
 - **Utils**: Utilitários, validadores, logging e cache
 - **CLI**: Interface de linha de comando unificada
 - **Cache**: Sistema de cache inteligente com metadados
+- **Recovery**: Sistema de checkpoints e recuperação automática
 - **Tests**: Suíte de testes automatizados
 
 ## 📁 Estrutura do Projeto
@@ -155,7 +182,8 @@ caged/
     │   ├── __init__.py
     │   ├── config.py         # Sistema de configuração
     │   ├── exceptions.py     # Exceções customizadas
-    │   └── pipeline.py       # Pipeline de processamento
+    │   ├── pipeline.py       # Pipeline de processamento
+    │   └── recovery.py       # Sistema de recovery
     ├── entities/             # Entidades de dados
     │   ├── __init__.py
     │   ├── movimentacao.py
@@ -276,6 +304,85 @@ parallel_processing:
     max_connections: 10
     timeout: 30  # segundos
     retry_attempts: 3
+
+recovery:
+  enabled: true
+  state_file: "state.json"
+  auto_cleanup_days: 30
+  max_checkpoints: 100
+```
+
+## 🔄 Sistema de Recovery
+
+O sistema implementa um robusto sistema de recovery para garantir a continuidade das operações:
+
+### 🎯 Funcionalidades do Recovery
+
+- **Checkpoints Automáticos**: Criação automática de pontos de recuperação durante o processamento
+- **Persistência de Estado**: Salvamento contínuo do progresso das operações
+- **Recuperação Inteligente**: Detecção e recuperação automática de operações interrompidas
+- **Gerenciamento de Falhas**: Tratamento robusto de erros com informações detalhadas
+- **Limpeza Automática**: Remoção automática de checkpoints antigos
+- **Monitoramento**: Acompanhamento detalhado do status das operações
+
+### 📈 Benefícios do Recovery
+
+- **Continuidade**: Operações podem ser retomadas após falhas ou interrupções
+- **Confiabilidade**: Redução significativa de perda de progresso
+- **Transparência**: Visibilidade completa do estado das operações
+- **Eficiência**: Evita reprocessamento desnecessário de dados
+- **Auditoria**: Histórico completo de operações e falhas
+
+### 🔧 Comandos de Recovery
+
+```bash
+# Listar todos os checkpoints
+python main.py recovery-list
+
+# Filtrar checkpoints por status
+python main.py recovery-list --status failed
+python main.py recovery-list --status completed
+
+# Filtrar por tipo de operação
+python main.py recovery-list --operation-type download
+python main.py recovery-list --operation-type processing
+
+# Ver detalhes de um checkpoint
+python main.py recovery-info d6c8aea015f4
+
+# Limpar checkpoints específicos
+python main.py recovery-clear --status completed --force
+python main.py recovery-clear --all --force
+python main.py recovery-clear d6c8aea015f4 --force
+```
+
+### ⚡ Uso Programático do Recovery
+
+```python
+from src.core.recovery import RecoveryManager
+
+# Criar gerenciador de recovery
+recovery = RecoveryManager()
+
+# Criar checkpoint para operação
+checkpoint_id = recovery.create_checkpoint(
+    operation_type="processing",
+    metadata={"ano": 2024, "mes": 1}
+)
+
+# Atualizar progresso
+recovery.update_checkpoint(
+    checkpoint_id,
+    progress=0.5,
+    current_step="Processando dados"
+)
+
+# Marcar como concluído
+recovery.complete_checkpoint(checkpoint_id)
+
+# Listar checkpoints ativos
+active = recovery.list_active_checkpoints()
+print(f"Operações ativas: {len(active)}")
 ```
 
 ## 📊 Dados CAGED
@@ -394,7 +501,8 @@ print(f"Processados {stats['completed_tasks']} itens")
 - [x] ✅ Comando processar unificado (integração completa)
 - [x] ✅ Sistema de configuração YAML
 
-### 🚀 Fase 3: Funcionalidades Avançadas (Planejada)
+### 🚀 Fase 3: Funcionalidades Avançadas (Em Andamento)
+- [x] ✅ Sistema de recovery e checkpoints (19 testes aprovados)
 - [ ] 📋 Interface web interativa
 - [ ] 📊 Dashboard de monitoramento
 - [ ] 🔔 Sistema de notificações
@@ -405,7 +513,8 @@ print(f"Processados {stats['completed_tasks']} itens")
 - [x] ✅ Testes de cache (18 testes)
 - [x] ✅ Testes de validação (26 testes)
 - [x] ✅ Testes de processamento paralelo (19 testes)
-- [ ] 🔄 Testes de integração
+- [x] ✅ Testes de recovery (19 testes)
+- [x] ✅ Testes de integração CLI
 - [ ] 🔄 Cobertura de código 90%+
 - [ ] 🔄 Documentação técnica completa
 
