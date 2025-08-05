@@ -128,6 +128,27 @@ python main.py recovery-clear --all --force
 python main.py recovery-clear [OPERATION_ID] --force
 ```
 
+### 📊 Sistema de Métricas
+```bash
+# Ver métricas de performance
+python main.py metrics
+
+# Métricas em formato tabular
+python main.py metrics --format table
+
+# Métricas em formato JSON
+python main.py metrics --format json
+
+# Salvar métricas em arquivo
+python main.py metrics --save relatorio.json
+
+# Ver apenas alertas de performance
+python main.py metrics --alerts-only
+
+# Executar exemplo de métricas
+python examples/exemplo_metricas.py
+```
+
 ## 🏗️ Arquitetura
 
 ### 🎯 Benefícios da Arquitetura
@@ -333,6 +354,28 @@ O sistema implementa um robusto sistema de recovery para garantir a continuidade
 - **Eficiência**: Evita reprocessamento desnecessário de dados
 - **Auditoria**: Histórico completo de operações e falhas
 
+## 📊 Sistema de Métricas
+
+O sistema implementa um sistema completo de monitoramento e métricas para acompanhar a performance:
+
+### 🎯 Funcionalidades das Métricas
+
+- **Coleta Automática**: Registro automático de todas as operações do sistema
+- **Métricas de Performance**: Tempo de execução, throughput e taxa de sucesso
+- **Recursos do Sistema**: Monitoramento de CPU, memória e espaço em disco
+- **Estatísticas de Cache**: Hit rate, economia de tempo e eficiência
+- **Alertas Inteligentes**: Detecção automática de problemas de performance
+- **Múltiplos Formatos**: Saída em texto, tabular e JSON
+- **Persistência**: Salvamento automático de métricas em arquivo
+
+### 📈 Benefícios das Métricas
+
+- **Visibilidade**: Acompanhamento completo da performance do sistema
+- **Otimização**: Identificação de gargalos e oportunidades de melhoria
+- **Monitoramento**: Alertas proativos para problemas de performance
+- **Análise**: Dados históricos para análise de tendências
+- **Relatórios**: Geração automática de relatórios detalhados
+
 ### 🔧 Comandos de Recovery
 
 ```bash
@@ -466,6 +509,7 @@ python main.py cache-clear --category downloads
 from src.utils.cache import cache_manager
 from src.utils.validators import DataValidator
 from src.core.pipeline import create_pipeline
+from src.utils.metrics import get_metrics_collector
 
 # Usar o cache em código Python
 if cache_manager.get_cached_file("dados_2024_01"):
@@ -481,6 +525,12 @@ pipeline = create_pipeline(max_workers=8, cache_enabled=True)
 results = await pipeline.process_items_parallel(items)
 stats = pipeline.get_parallel_stats()
 print(f"Processados {stats['completed_tasks']} itens")
+
+# Usar sistema de métricas
+metrics = get_metrics_collector()
+metrics.record_operation("download", success=True, duration=2.5)
+report = metrics.generate_report()
+print(f"Taxa de sucesso: {report['summary']['overall_success_rate']:.1%}")
 ```
 
 ## 🎯 Status do Desenvolvimento
@@ -503,6 +553,7 @@ print(f"Processados {stats['completed_tasks']} itens")
 
 ### 🚀 Fase 3: Funcionalidades Avançadas (Em Andamento)
 - [x] ✅ Sistema de recovery e checkpoints (19 testes aprovados)
+- [x] ✅ Sistema de métricas e monitoramento (CLI completa)
 - [ ] 📋 Interface web interativa
 - [ ] 📊 Dashboard de monitoramento
 - [ ] 🔔 Sistema de notificações
@@ -515,6 +566,7 @@ print(f"Processados {stats['completed_tasks']} itens")
 - [x] ✅ Testes de processamento paralelo (19 testes)
 - [x] ✅ Testes de recovery (19 testes)
 - [x] ✅ Testes de integração CLI
+- [x] ✅ Sistema de métricas funcional
 - [ ] 🔄 Cobertura de código 90%+
 - [ ] 🔄 Documentação técnica completa
 

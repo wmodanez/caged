@@ -22,6 +22,9 @@ import logging
 # Usar o logger centralizado configurado no main.py
 logger = logging.getLogger("caged")
 
+# Importar sistema de métricas
+from ..utils.metrics import record_operation, record_cache_hit, record_cache_miss
+
 # Imports locais - Entidades
 from src.entities.movimentacao import Movimentacao
 from src.entities.saldo_mensal import SaldoMensal
@@ -3795,6 +3798,9 @@ class ConversorParquetCaged:
         Returns:
             Tuple[bool, List[Movimentacao], List[SaldoMensal], List[Indicador]]: Resultado da conversão
         """
+        # Registrar início da operação de conversão
+        inicio_conversao = time.time()
+        
         with self.medidor.etapa(f"Conversão Mensal {ano}/{mes:02d}"):
             # Configurar filtros se fornecidos
             if any([filtros_cnae, filtros_periodo, filtros_movimentacao, filtros_geograficos]):
@@ -3851,6 +3857,24 @@ class ConversorParquetCaged:
             logger.info(f"   📊 Arquivos processados: {len([r for r in resultados if r['sucesso']])}/{len(arquivos_origem)}")
             logger.info(f"   📈 Total de registros: {sum(df.shape[0] for df in dataframes):,}")
             logger.info(f"   🚀 Cache: {'Habilitado' if self.habilitar_cache else 'Desabilitado'}")
+            
+            # Registrar métricas da conversão mensal
+            tempo_total_conversao = time.time() - inicio_conversao
+            record_operation(
+                operation="convert_monthly",
+                success=sucesso,
+                duration=tempo_total_conversao,
+                details={
+                    "ano": ano,
+                    "mes": mes,
+                    "total_arquivos": len(arquivos_origem),
+                    "arquivos_processados": len([r for r in resultados if r['sucesso']]),
+                    "arquivos_com_erro": len([r for r in resultados if not r['sucesso']]),
+                    "total_registros": sum(df.shape[0] for df in dataframes),
+                    "paralelismo": usar_paralelo,
+                    "cache_habilitado": self.habilitar_cache
+                }
+            )
             
             return sucesso, movimentacoes_totais, saldos_totais, indicadores_totais
     

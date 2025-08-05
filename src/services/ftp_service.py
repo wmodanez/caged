@@ -19,6 +19,9 @@ import logging
 # Usar o logger centralizado configurado no main.py
 logger = logging.getLogger("caged")
 
+# Importar sistema de métricas
+from ..utils.metrics import record_operation, record_cache_hit, record_cache_miss
+
 # Importação das entidades
 from src.entities.movimentacao import Movimentacao
 from src.entities.saldo_mensal import SaldoMensal
@@ -155,12 +158,12 @@ class GerenciadorArquivosCaged:
     
     @retry_on_ftp_error(max_retries=3, delay=2.0)
     def conectar(self) -> bool:
-        """
-        Estabelece conexão com o servidor FTP
+        """Estabelece conexão com o servidor FTP
         
         Returns:
             bool: True se conectou com sucesso
         """
+        connection_start_time = time.time()
         try:
             logger.info(f"🔗 Conectando ao servidor FTP: {self.servidor_ftp}")
             self.ftp_conn = ftplib.FTP(self.servidor_ftp)
@@ -181,6 +184,16 @@ class GerenciadorArquivosCaged:
                     self._diretorio_atual = caminho
                     logger.info(f"✅ Conectado com sucesso em: {caminho}")
                     self.diretorio_remoto = caminho
+                    
+                    # Registrar métrica de conexão bem-sucedida
+                    connection_duration = time.time() - connection_start_time
+                    record_operation(
+                        "ftp_connection",
+                        True,
+                        connection_duration,
+                        {"server": self.servidor_ftp, "directory": caminho}
+                    )
+                    
                     return True
                 except ftplib.error_perm as e:
                     logger.warning(f"❌ Caminho não encontrado: {caminho} - {e}")
@@ -192,10 +205,30 @@ class GerenciadorArquivosCaged:
             for arquivo in arquivos[:10]:
                 logger.info(f"   {arquivo}")
             logger.error("❌ Não foi possível encontrar o diretório CAGED")
+            
+            # Registrar métrica de falha na conexão
+            connection_duration = time.time() - connection_start_time
+            record_operation(
+                "ftp_connection",
+                False,
+                connection_duration,
+                {"server": self.servidor_ftp, "error": "Directory not found"}
+            )
+            
             return False
         except Exception as e:
             logger.error(f"❌ Erro ao conectar: {e}", exc_info=True)
             self.ftp_conn = None
+            
+            # Registrar métrica de erro na conexão
+            connection_duration = time.time() - connection_start_time
+            record_operation(
+                "ftp_connection",
+                False,
+                connection_duration,
+                {"server": self.servidor_ftp, "error": str(e)}
+            )
+            
             return False
     
     @retry_on_ftp_error(max_retries=2, delay=0.5)
@@ -314,8 +347,7 @@ class GerenciadorArquivosCaged:
                            ano: int, 
                            mes: int, 
                            diretorio_destino: str = "files-zip") -> Tuple[bool, List[Dict]]:
-        """
-        Baixa dados mensais do CAGED
+        """Baixa dados mensais do CAGED
         
         Args:
             ano: Ano dos dados
@@ -325,8 +357,16 @@ class GerenciadorArquivosCaged:
         Returns:
             Tuple[bool, List[Dict]]: (Sucesso, Lista de metadados dos downloads)
         """
+        download_session_start = time.time()
+        
         if not self.ftp_conn:
             logger.error("❌ Não conectado ao FTP. Use conectar() primeiro.")
+            record_operation(
+                "download_session",
+                False,
+                0.0,
+                {"ano": ano, "mes": mes, "error": "Not connected to FTP"}
+            )
             return False, []
         
         # Primeiro verificar se o período existe no servidor
@@ -356,34 +396,89 @@ class GerenciadorArquivosCaged:
                 # Verificar se arquivo já existe
                 if self.verificar_arquivo_existe(str(caminho_local)):
                     logger.info(f"⏭️  Arquivo já existe: {arquivo}")
+                    record_cache_hit()  # Arquivo já existe = cache hit
                     metadados = self.metadados_downloads.get(arquivo, self._extrair_metadados_arquivo(arquivo, ano, mes))
                     metadados_downloads.append(metadados)
                     sucessos += 1
                     continue
                 
+                record_cache_miss()  # Precisa baixar = cache miss
+                
                 # Tentar baixar o arquivo com retry automático
-                if self._baixar_arquivo_individual(arquivo, caminho_local):
+                file_download_start = time.time()
+                download_success = self._baixar_arquivo_individual(arquivo, caminho_local)
+                file_download_duration = time.time() - file_download_start
+                
+                if download_success:
                     sucessos += 1
-                    tamanho = self._formatar_tamanho(caminho_local.stat().st_size)
+                    tamanho_bytes = caminho_local.stat().st_size
+                    tamanho = self._formatar_tamanho(tamanho_bytes)
                     logger.info(f"✅ {arquivo} - {tamanho}")
+                    
+                    # Registrar métrica de download bem-sucedido
+                    record_operation(
+                        "file_download",
+                        True,
+                        file_download_duration,
+                        {
+                            "filename": arquivo,
+                            "size_bytes": tamanho_bytes,
+                            "ano": ano,
+                            "mes": mes
+                        }
+                    )
+                    
                     metadados = self._criar_metadados_download(arquivo, caminho_local, ano, mes)
                     metadados_downloads.append(metadados)
                     self.metadados_downloads[arquivo] = metadados
                 else:
                     logger.error(f"❌ Falha no download após todas as tentativas: {arquivo}")
                     
+                    # Registrar métrica de download falhado
+                    record_operation(
+                        "file_download",
+                        False,
+                        file_download_duration,
+                        {
+                            "filename": arquivo,
+                            "ano": ano,
+                            "mes": mes,
+                            "error": "Download failed after retries"
+                        }
+                    )
+                    
             except FTPRetryError as e:
                 logger.error(f"❌ Erro de retry esgotado para {arquivo}: {e}")
             except Exception as e:
                 logger.error(f"❌ Erro inesperado ao baixar {arquivo}: {e}", exc_info=True)
         logger.info(f"📊 Download concluído: {sucessos}/{total} arquivos baixados")
+        
+        # Registrar métricas da sessão de download
+        download_session_duration = time.time() - download_session_start
+        session_success = sucessos > 0
+        total_bytes = sum(m.get('tamanho_bytes', 0) for m in metadados_downloads)
+        
+        record_operation(
+            "download_session",
+            session_success,
+            download_session_duration,
+            {
+                "ano": ano,
+                "mes": mes,
+                "total_files": total,
+                "successful_files": sucessos,
+                "failed_files": total - sucessos,
+                "total_bytes": total_bytes,
+                "success_rate": (sucessos / total) * 100 if total > 0 else 0
+            }
+        )
+        
         self._criar_indicadores_download(ano, mes, sucessos, total)
         return sucessos > 0, metadados_downloads
     
     @retry_on_ftp_error(max_retries=3, delay=1.0)
     def _baixar_arquivo_individual(self, nome_arquivo: str, caminho_local: Path) -> bool:
-        """
-        Baixa um arquivo individual do FTP com retry automático
+        """Baixa um arquivo individual do FTP com retry automático
         
         Args:
             nome_arquivo: Nome do arquivo no servidor FTP
@@ -392,19 +487,59 @@ class GerenciadorArquivosCaged:
         Returns:
             bool: True se o download foi bem-sucedido
         """
+        individual_download_start = time.time()
+        
         try:
             with open(caminho_local, 'wb') as f:
                 self.ftp_conn.retrbinary(f'RETR {nome_arquivo}', f.write)
             
             # Verificar se o arquivo foi baixado corretamente
             if caminho_local.exists() and caminho_local.stat().st_size > 0:
+                individual_download_duration = time.time() - individual_download_start
+                
+                # Registrar métrica de transferência FTP bem-sucedida
+                record_operation(
+                    "ftp_transfer",
+                    True,
+                    individual_download_duration,
+                    {
+                        "filename": nome_arquivo,
+                        "size_bytes": caminho_local.stat().st_size,
+                        "transfer_rate_mbps": (caminho_local.stat().st_size / (1024 * 1024)) / individual_download_duration if individual_download_duration > 0 else 0
+                    }
+                )
+                
                 return True
             else:
                 logger.error(f"❌ Arquivo baixado está vazio ou corrompido: {nome_arquivo}")
+                
+                # Registrar métrica de arquivo corrompido
+                record_operation(
+                    "ftp_transfer",
+                    False,
+                    time.time() - individual_download_start,
+                    {
+                        "filename": nome_arquivo,
+                        "error": "Empty or corrupted file"
+                    }
+                )
+                
                 return False
                 
         except Exception as e:
             logger.error(f"❌ Erro no download de {nome_arquivo}: {e}")
+            
+            # Registrar métrica de erro na transferência
+            record_operation(
+                "ftp_transfer",
+                False,
+                time.time() - individual_download_start,
+                {
+                    "filename": nome_arquivo,
+                    "error": str(e)
+                }
+            )
+            
             # Remover arquivo parcial se existir
             if caminho_local.exists():
                 caminho_local.unlink()

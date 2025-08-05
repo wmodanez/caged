@@ -28,6 +28,9 @@ import logging
 # Usar o logger centralizado configurado no main.py
 logger = logging.getLogger("caged")
 
+# Importar sistema de métricas
+from ..utils.metrics import record_operation, record_cache_hit, record_cache_miss
+
 
 class MonitorDescompactacao:
     """
@@ -521,6 +524,19 @@ class DescompactadorCaged:
                 tempo_processamento = time.time() - inicio_processamento
                 self.monitor.registrar_sucesso(tempo_processamento, metadados['tamanho_total_descompactado'])
                 
+                # Registrar métricas de descompactação
+                record_operation(
+                    operation="extract_file",
+                    success=True,
+                    duration=tempo_processamento,
+                    details={
+                        "arquivo": arquivo_7z.name,
+                        "arquivos_extraidos": len(metadados.get('arquivos_extraidos', [])),
+                        "tamanho_bytes": metadados['tamanho_total_descompactado'],
+                        "destino": str(destino)
+                    }
+                )
+                
                 # Log estruturado para sucesso
                 self._log_estruturado("info", "Descompactação concluída com sucesso", {
                     "arquivo": arquivo_7z.name,
@@ -544,6 +560,19 @@ class DescompactadorCaged:
             
             # Registrar falha no monitor
             self.monitor.registrar_falha(f"Erro ao descompactar {arquivo_7z.name}: {e}", "erro_descompactacao")
+            
+            # Registrar métricas de falha
+            tempo_processamento = time.time() - inicio_processamento
+            record_operation(
+                operation="extract_file",
+                success=False,
+                duration=tempo_processamento,
+                details={
+                    "arquivo": arquivo_7z.name,
+                    "erro": str(e),
+                    "destino": str(destino) if destino else "N/A"
+                }
+            )
             
             # Log estruturado para erro
             self._log_estruturado("error", "Falha na descompactação", {
@@ -576,6 +605,9 @@ class DescompactadorCaged:
             Tuple[bool, List[Dict]]: (Sucesso, Lista de metadados)
         """
         import time
+        
+        # Registrar início da operação mensal
+        inicio_operacao = time.time()
         
         # Criar estrutura de pastas igual à origem
         diretorio_mes = f"{ano}{mes:02d}"
@@ -757,6 +789,23 @@ class DescompactadorCaged:
         
         # Criar indicador para a competência
         self._criar_indicador_competencia(ano, mes, sucessos, len(arquivos_7z))
+        
+        # Registrar métricas da operação mensal
+        tempo_total_operacao = time.time() - inicio_operacao
+        record_operation(
+            operation="extract_monthly",
+            success=sucessos > 0,
+            duration=tempo_total_operacao,
+            details={
+                "ano": ano,
+                "mes": mes,
+                "total_arquivos": len(arquivos_7z),
+                "arquivos_processados": len(arquivos_para_descompactar),
+                "sucessos": sucessos,
+                "bytes_processados": bytes_processados,
+                "metodo": "paralelo" if usar_paralelo and len(arquivos_7z) > 3 else "sequencial"
+            }
+        )
         
         return sucessos > 0, metadados_lista
     

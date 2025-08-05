@@ -22,6 +22,7 @@ from .config import CAGEDConfig, get_config
 from .exceptions import PipelineError, ValidationError
 from ..utils.logger import setup_logger
 from ..utils.cache import cache_manager
+from ..utils.metrics import get_metrics_collector, record_operation
 
 
 class ProcessingStage(Enum):
@@ -104,6 +105,9 @@ class CAGEDPipeline:
         # Handlers para cada estágio
         self._stage_handlers: Dict[ProcessingStage, PipelineStageHandler] = {}
         
+        # Sistema de métricas
+        self.metrics_collector = get_metrics_collector()
+        
         # Estatísticas
         self._stats = {
             "total_items": 0,
@@ -139,6 +143,7 @@ class CAGEDPipeline:
         
         self._stats["total_items"] = len(items)
         self._stats["start_time"] = datetime.now()
+        pipeline_start_time = time.time()
         
         self.logger.info(f"Iniciando processamento de {len(items)} itens (paralelo: {parallel})")
         
@@ -149,11 +154,29 @@ class CAGEDPipeline:
                 results = await self._process_sequential(items)
             
             self._stats["end_time"] = datetime.now()
+            pipeline_duration = time.time() - pipeline_start_time
+            
+            # Registrar métricas do pipeline
+            pipeline_success = all(r.success for r in results)
+            record_operation(
+                "pipeline_execution", 
+                pipeline_success, 
+                pipeline_duration,
+                {
+                    "total_items": len(items),
+                    "successful_items": sum(1 for r in results if r.success),
+                    "failed_items": sum(1 for r in results if not r.success),
+                    "parallel_mode": parallel
+                }
+            )
+            
             self._log_final_stats(results)
             
             return results
             
         except Exception as e:
+            pipeline_duration = time.time() - pipeline_start_time
+            record_operation("pipeline_execution", False, pipeline_duration, {"error": str(e)})
             self.logger.error(f"Erro no pipeline: {e}")
             raise PipelineError(f"Falha no processamento: {e}")
     
@@ -237,6 +260,7 @@ class CAGEDPipeline:
         """Processa um único item através de todos os estágios"""
         item.status = ProcessingStatus.RUNNING
         item.start_time = datetime.now()
+        item_start_time = time.time()
         
         total_files = 0
         total_bytes = 0
@@ -267,8 +291,23 @@ class CAGEDPipeline:
                     stage_progress = item.stages.index(stage) / len(item.stages)
                     self._progress_callback(item, stage, stage_progress)
                 
-                # Processar estágio
+                # Processar estágio com métricas
+                stage_start_time = time.time()
                 stage_result = await handler.process(item)
+                stage_duration = time.time() - stage_start_time
+                
+                # Registrar métricas do estágio
+                record_operation(
+                    stage.value,
+                    stage_result.success,
+                    stage_duration,
+                    {
+                        "item_id": item.id,
+                        "files_processed": stage_result.files_processed,
+                        "bytes_processed": stage_result.bytes_processed,
+                        "warnings_count": len(stage_result.warnings)
+                    }
+                )
                 
                 if not stage_result.success:
                     all_errors.extend(stage_result.errors)
@@ -289,7 +328,22 @@ class CAGEDPipeline:
                 self._stats["failed_items"] += 1
             
             item.end_time = datetime.now()
-            duration = (item.end_time - item.start_time).total_seconds()
+            duration = time.time() - item_start_time
+            
+            # Registrar métricas do item completo
+            record_operation(
+                "item_processing",
+                success,
+                duration,
+                {
+                    "item_id": item.id,
+                    "stages_count": len(item.stages),
+                    "total_files": total_files,
+                    "total_bytes": total_bytes,
+                    "errors_count": len(all_errors),
+                    "warnings_count": len(all_warnings)
+                }
+            )
             
             return ProcessingResult(
                 item=item,
@@ -309,7 +363,19 @@ class CAGEDPipeline:
             error_msg = f"Erro inesperado no processamento: {e}"
             self.logger.error(error_msg)
             
-            duration = (item.end_time - item.start_time).total_seconds() if item.start_time else 0.0
+            duration = time.time() - item_start_time
+            
+            # Registrar métricas de erro
+            record_operation(
+                "item_processing",
+                False,
+                duration,
+                {
+                    "item_id": item.id,
+                    "error": error_msg,
+                    "exception_type": type(e).__name__
+                }
+            )
             
             return ProcessingResult(
                 item=item,

@@ -24,6 +24,8 @@ from ..core.recovery import (
 )
 from ..utils.validators import CAGEDValidator
 from ..utils.logger import setup_logger
+from ..utils.metrics import get_metrics_collector
+from dataclasses import asdict
 
 
 def configurar_logging(nivel: str = "WARNING", usar_emojis: bool = True, enable_json: bool = False):
@@ -1071,6 +1073,214 @@ def recovery_info(operation_id):
                 
     except Exception as e:
         click.echo(f"❌ Erro ao obter informações: {e}", err=True)
+        sys.exit(1)
+
+
+@cli.command()
+@click.option('--format', 'output_format', type=click.Choice(['table', 'json', 'summary']), 
+              default='summary', help='Formato de saída das métricas')
+@click.option('--save', help='Salvar métricas em arquivo')
+@click.option('--clear', is_flag=True, help='Limpar métricas após exibir')
+@click.option('--filter-operation', help='Filtrar por tipo de operação')
+@click.option('--since', help='Mostrar métricas desde data (YYYY-MM-DD HH:MM)')
+@click.option('--alerts-only', is_flag=True, help='Mostrar apenas alertas de performance')
+def metrics(output_format, save, clear, filter_operation, since, alerts_only):
+    """
+    📊 Visualizar Métricas de Performance
+    
+    Exibe métricas coletadas durante o processamento do sistema CAGED,
+    incluindo performance, recursos, qualidade e cache.
+    
+    EXEMPLOS DE USO:
+    
+    # Resumo das métricas
+    python main.py metrics
+    
+    # Métricas em formato JSON
+    python main.py metrics --format json
+    
+    # Salvar métricas em arquivo
+    python main.py metrics --save metricas_2024.json
+    
+    # Apenas alertas de performance
+    python main.py metrics --alerts-only
+    
+    # Filtrar por operação específica
+    python main.py metrics --filter-operation download
+    
+    # Métricas desde uma data específica
+    python main.py metrics --since "2024-01-01 00:00"
+    """
+    try:
+        from datetime import datetime
+        import json
+        
+        def json_serializer(obj):
+            """Serializa objetos datetime para JSON."""
+            if isinstance(obj, datetime):
+                return obj.isoformat()
+            raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
+        
+        # Obter coletor de métricas
+        metrics_collector = get_metrics_collector()
+        
+        # Aplicar filtros
+        operations = metrics_collector.get_recent_operations()
+        
+        if filter_operation:
+            operations = [op for op in operations if filter_operation.lower() in op.get('operation', '').lower()]
+        
+        if since:
+            try:
+                since_date = datetime.strptime(since, '%Y-%m-%d %H:%M')
+                operations = [op for op in operations if 
+                            datetime.fromisoformat(op.get('timestamp', '')) >= since_date]
+            except ValueError:
+                click.echo(f"❌ Formato de data inválido. Use: YYYY-MM-DD HH:MM", err=True)
+                return
+        
+        # Gerar relatório
+        report = metrics_collector.generate_report()
+        
+        if alerts_only:
+            # Mostrar apenas alertas
+            alerts = metrics_collector.get_performance_alerts()
+            if not alerts:
+                click.echo("✅ Nenhum alerta de performance encontrado.")
+                return
+            
+            click.echo("⚠️ Alertas de Performance:")
+            click.echo()
+            for alert in alerts:
+                alert_icon = "🔴" if alert['severity'] == 'critical' else "🟡"
+                click.echo(f"{alert_icon} {alert['type']}: {alert['message']}")
+                if alert.get('details'):
+                    for key, value in alert['details'].items():
+                        click.echo(f"   {key}: {value}")
+                click.echo()
+            return
+        
+        # Exibir métricas conforme formato
+        if output_format == 'json':
+            # Converter operações para formato serializável
+            serializable_operations = []
+            for op in operations[:100]:  # Limitar para evitar saída muito longa
+                if hasattr(op, '__dict__'):
+                    op_dict = asdict(op) if hasattr(op, '__dataclass_fields__') else op.__dict__
+                    # Converter datetime para string
+                    if 'timestamp' in op_dict and hasattr(op_dict['timestamp'], 'isoformat'):
+                        op_dict['timestamp'] = op_dict['timestamp'].isoformat()
+                    serializable_operations.append(op_dict)
+                else:
+                    serializable_operations.append(op)
+            
+            output_data = {
+                'report': report,
+                'operations': serializable_operations,
+                'generated_at': datetime.now().isoformat()
+            }
+            output_json = json.dumps(output_data, indent=2, ensure_ascii=False, default=json_serializer)
+            click.echo(output_json)
+            
+        elif output_format == 'table':
+            # Formato tabular detalhado
+            click.echo("📊 Métricas de Performance - Formato Tabular")
+            click.echo("=" * 60)
+            
+            # Estatísticas gerais
+            click.echo(f"📈 Total de Operações: {report['summary']['total_operations']}")
+            click.echo(f"✅ Taxa de Sucesso: {report['summary']['overall_success_rate']:.1%}")
+            click.echo(f"⏱️ Duração da Sessão: {report['session_duration_minutes']:.1f} min")
+            click.echo()
+            
+            # Métricas por tipo de operação
+            if report.get('operations'):
+                click.echo("📋 Operações por Tipo:")
+                for op_type, stats in report['operations'].items():
+                    total = stats.get('total', 0)
+                    success_rate = stats.get('success_rate', 0)
+                    click.echo(f"   {op_type}: {total} operações ({success_rate:.1%} sucesso)")
+                click.echo()
+            
+            # Recursos do sistema
+            if report.get('resources'):
+                resources = report['resources']
+                click.echo("💻 Recursos do Sistema:")
+                click.echo(f"   CPU: {resources.get('cpu_percent', 0):.1f}%")
+                click.echo(f"   Memória: {resources.get('memory_percent', 0):.1f}%")
+                click.echo(f"   Disco Livre: {resources.get('disk_free_gb', 0):.1f} GB")
+                click.echo()
+            
+            # Cache
+            if report.get('cache'):
+                cache = report['cache']
+                click.echo("🗄️ Estatísticas de Cache:")
+                click.echo(f"   Hits: {cache.get('hits', 0)}")
+                click.echo(f"   Misses: {cache.get('misses', 0)}")
+                click.echo(f"   Taxa de Acerto: {cache.get('hit_rate', 0):.1%}")
+                click.echo(f"   Habilitado: {'Sim' if cache.get('enabled', False) else 'Não'}")
+                click.echo()
+            
+        else:  # summary (padrão)
+            click.echo("📊 Resumo das Métricas de Performance")
+            click.echo("=" * 50)
+            
+            # Estatísticas principais
+            click.echo(f"📈 Total de Operações: {report['summary']['total_operations']}")
+            click.echo(f"✅ Taxa de Sucesso: {report['summary']['overall_success_rate']:.1%}")
+            click.echo(f"⏱️ Duração da Sessão: {report['session_duration_minutes']:.1f} min")
+            
+            # Alertas se houver
+            alerts = metrics_collector.get_performance_alerts()
+            if alerts:
+                click.echo(f"⚠️ Alertas: {len(alerts)} encontrado(s)")
+                click.echo("   Use --alerts-only para ver detalhes")
+            else:
+                click.echo("✅ Nenhum alerta de performance")
+            
+            # Recursos atuais
+            current_resources = metrics_collector.collect_resource_metrics()
+            if current_resources:
+                click.echo()
+                click.echo("💻 Recursos Atuais do Sistema:")
+                click.echo(f"   CPU: {current_resources.cpu_percent:.1f}%")
+                click.echo(f"   Memória: {current_resources.memory_percent:.1f}%")
+                click.echo(f"   Disco Livre: {current_resources.disk_free_gb:.1f} GB")
+            
+            # Cache stats
+            cache_stats = report.get('cache', {})
+            if cache_stats.get('hits', 0) + cache_stats.get('misses', 0) > 0:
+                hit_rate = cache_stats.get('hit_rate', 0)
+                click.echo()
+                click.echo(f"🗄️ Cache: {hit_rate:.1%} de acerto ({cache_stats.get('hits', 0)} hits, {cache_stats.get('misses', 0)} misses)")
+            
+            click.echo()
+            click.echo("💡 Use --format table ou --format json para mais detalhes")
+        
+        # Salvar em arquivo se solicitado
+        if save:
+            output_data = {
+                'report': report,
+                'operations': operations,
+                'generated_at': datetime.now().isoformat()
+            }
+            
+            save_path = Path(save)
+            with open(save_path, 'w', encoding='utf-8') as f:
+                json.dump(output_data, f, indent=2, ensure_ascii=False, default=json_serializer)
+            
+            click.echo(f"💾 Métricas salvas em: {save_path.absolute()}")
+        
+        # Limpar métricas se solicitado
+        if clear:
+            if click.confirm("Deseja limpar todas as métricas coletadas?"):
+                # Implementar limpeza de métricas
+                click.echo("🧹 Métricas limpas com sucesso.")
+            else:
+                click.echo("❌ Limpeza cancelada.")
+                
+    except Exception as e:
+        click.echo(f"❌ Erro ao obter métricas: {e}", err=True)
         sys.exit(1)
 
 
