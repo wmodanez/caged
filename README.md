@@ -376,6 +376,134 @@ O sistema implementa um sistema completo de monitoramento e métricas para acomp
 - **Análise**: Dados históricos para análise de tendências
 - **Relatórios**: Geração automática de relatórios detalhados
 
+## 🧪 Testes Automatizados
+
+O sistema implementa uma suíte completa de testes automatizados para garantir qualidade e confiabilidade:
+
+### 🎯 Estrutura de Testes
+
+```
+tests/
+├── conftest.py                    # Configurações globais e fixtures
+├── pytest.ini                     # Configuração do pytest
+├── unit/                          # Testes unitários
+│   ├── test_cache.py              # Testes do sistema de cache
+│   ├── test_validators.py         # Testes dos validadores
+│   ├── test_recovery.py           # Testes do sistema de recovery
+│   ├── test_ftp_service.py        # Testes do serviço FTP
+│   ├── test_extract_service.py    # Testes do serviço de extração
+│   ├── test_convert_service.py    # Testes do serviço de conversão
+│   └── test_metrics.py            # Testes do sistema de métricas
+├── integration/                   # Testes de integração
+│   ├── test_parallel_pipeline.py  # Testes do pipeline paralelo
+│   └── test_full_pipeline.py      # Testes do pipeline completo
+└── fixtures/                      # Dados e mocks para testes
+    ├── sample_data/               # Dados de exemplo
+    └── mock_responses/            # Respostas simuladas
+```
+
+### 🚀 Executando Testes
+
+#### Execução Básica
+```bash
+# Executar todos os testes
+python run_tests.py --all
+
+# Apenas testes unitários
+python run_tests.py --unit
+
+# Apenas testes de integração
+python run_tests.py --integration
+
+# Testes rápidos (exclui testes lentos)
+python run_tests.py --quick
+```
+
+#### Execução com Cobertura
+```bash
+# Todos os testes com relatório de cobertura
+python run_tests.py --all --coverage
+
+# Testes unitários com cobertura
+python run_tests.py --unit --coverage
+```
+
+#### Execução Paralela
+```bash
+# Executar testes em paralelo
+python run_tests.py --all --parallel
+
+# Pipeline completo de CI/CD
+python run_tests.py --ci
+```
+
+#### Testes por Categoria
+```bash
+# Testes de cache
+python run_tests.py --marker cache
+
+# Testes de validação
+python run_tests.py --marker validators
+
+# Testes de métricas
+python run_tests.py --marker metrics
+
+# Testes de serviços
+python run_tests.py --marker services
+```
+
+### 📊 Relatórios de Qualidade
+
+```bash
+# Gerar relatório completo de qualidade
+python run_tests.py --quality
+
+# Executar com profiling de performance
+python run_tests.py --profile
+
+# Testes de performance
+python run_tests.py --performance
+```
+
+### 🎯 Cobertura de Testes
+
+O sistema mantém alta cobertura de testes em todos os componentes:
+
+- **Testes Unitários**: 80+ testes cobrindo todas as classes e funções principais
+- **Testes de Integração**: 20+ testes verificando a integração entre componentes
+- **Testes de Sistema**: Pipeline completo end-to-end
+- **Mocks e Fixtures**: Dados de teste realistas e mocks configuráveis
+- **Validação de Dados**: Testes com dados reais e casos extremos
+
+### 🔧 Configuração de Testes
+
+O arquivo `pytest.ini` configura:
+
+- **Marcadores Personalizados**: `slow`, `integration`, `unit`, `ftp`, `cache`, `recovery`, `metrics`
+- **Cobertura Automática**: Relatórios HTML, XML e terminal
+- **Timeout**: Proteção contra testes infinitos
+- **Logging**: Saída estruturada para debugging
+- **Filtros**: Supressão de warnings desnecessários
+
+### 🚀 Pipeline de CI/CD
+
+O script `run_tests.py` oferece um pipeline completo:
+
+1. **Testes Unitários**: Verificação de componentes individuais
+2. **Testes de Integração**: Verificação de interações entre componentes
+3. **Análise de Cobertura**: Relatórios detalhados de cobertura
+4. **Análise Estática**: Verificação de qualidade de código (flake8)
+5. **Análise de Complexidade**: Métricas de complexidade (radon)
+6. **Relatório Consolidado**: Resumo executivo em Markdown
+
+### 📈 Métricas de Qualidade
+
+- **Cobertura de Código**: Meta de 80%+ (configurável)
+- **Taxa de Sucesso**: 100% dos testes devem passar
+- **Performance**: Testes executam em < 5 minutos
+- **Qualidade**: Análise estática sem erros críticos
+- **Manutenibilidade**: Complexidade ciclomática controlada
+
 ### 🔧 Comandos de Recovery
 
 ```bash
@@ -567,6 +695,9 @@ print(f"Taxa de sucesso: {report['summary']['overall_success_rate']:.1%}")
 - [x] ✅ Testes de recovery (19 testes)
 - [x] ✅ Testes de integração CLI
 - [x] ✅ Sistema de métricas funcional
+- [x] ✅ Testes automatizados completos (100+ testes)
+- [x] ✅ Pipeline de CI/CD configurado
+- [x] ✅ Relatórios de cobertura automatizados
 - [ ] 🔄 Cobertura de código 90%+
 - [ ] 🔄 Documentação técnica completa
 
