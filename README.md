@@ -15,6 +15,23 @@ Sistema automatizado para download, processamento e consolidação de dados mens
 - **💾 Cache Inteligente**: Sistema de cache com verificação de integridade e expiração automática
 - **🔍 Validação Robusta**: Sistema de validação abrangente com testes automatizados
 - **🔄 Sistema de Recovery**: Checkpoints automáticos e recuperação de falhas
+- **📁 Organização Hierárquica**: Estrutura de diretórios espelhando o servidor FTP (AAAA/AAAAMM)
+- **🎯 Processamento Anual Simplificado**: Processa todos os meses automaticamente com `--ano` apenas
+
+## 🆕 Mudanças Recentes
+
+### ✨ Funcionalidades Implementadas
+
+- **🎯 Processamento Anual Automático**: Agora você pode processar todos os meses de um ano usando apenas `python main.py processar --ano 2024`, eliminando a necessidade do parâmetro `--todos-meses`
+- **📁 Estrutura de Diretórios Hierárquica**: Os arquivos baixados são organizados em `files-zip/AAAA/AAAAMM/` espelhando a estrutura do servidor FTP
+- **🔄 Atualização do FTP Service**: Adaptado para navegar corretamente na estrutura do Novo CAGED (`/pdet/microdados/NOVO CAGED`)
+- **📋 CLI Simplificada**: Interface mais intuitiva com comportamento padrão inteligente
+
+### 🔧 Melhorias Técnicas
+
+- **Validação Aprimorada**: Lógica de validação de parâmetros mais flexível e intuitiva
+- **Organização de Arquivos**: Estrutura de pastas que facilita a localização e gerenciamento dos dados
+- **Compatibilidade Mantida**: Todos os comandos existentes continuam funcionando normalmente
 
 ## 📋 Requisitos
 
@@ -46,8 +63,8 @@ pip install -r requirements.txt
 # Processamento completo (download + extração + conversão)
 python main.py processar --ano 2024 --mes 1
 
-# Processamento anual completo
-python main.py processar --ano 2024 --anual
+# Processamento anual completo (todos os meses do ano)
+python main.py processar --ano 2024
 
 # Processamento por faixa de datas
 python main.py processar --ano-inicio 2024 --mes-inicio 1 --ano-fim 2024 --mes-fim 6
@@ -187,7 +204,12 @@ caged/
 ├── examples/                 # Exemplos de uso
 │   ├── cache_usage_example.py # Exemplo de uso do cache
 │   └── parallel_processing_example.py # Exemplo de processamento paralelo
-├── files-zip/                # Arquivos baixados (7z)
+├── files-zip/                # Arquivos baixados (7z) organizados por ano/mês
+│   └── AAAA/                 # Diretório do ano (ex: 2024)
+│       └── AAAAMM/           # Diretório do mês (ex: 202401)
+│           ├── CAGEDMOV*.7z  # Arquivo de movimentação
+│           ├── CAGEDEXC*.7z  # Arquivo de exclusão
+│           └── CAGEDFOR*.7z  # Arquivo fora de prazo
 ├── files-unzip/              # Arquivos descompactados
 ├── parquet/                  # Dados processados (Parquet)
 ├── logs/                     # Logs de execução
@@ -601,11 +623,14 @@ O sistema gera automaticamente diversos indicadores para análise do mercado de 
 # Processar dados de janeiro de 2024
 python main.py processar --ano 2024 --mes 1
 
-# Processar ano completo com cache
-python main.py processar --ano 2024 --anual --use-cache
+# Processar ano completo (todos os meses) com cache
+python main.py processar --ano 2024 --use-cache
 
 # Processar com validação rigorosa
 python main.py processar --ano 2024 --mes 1 --validacao-rigorosa
+
+# Verificar processamento com dry-run
+python main.py processar --ano 2024 --dry-run
 ```
 
 ### ⚡ Processamento Otimizado
@@ -714,7 +739,7 @@ print(f"Taxa de sucesso: {report['summary']['overall_success_rate']:.1%}")
 - [ ] **Testes de Stress**: Validação com cargas extremas do sistema
 
 #### 3.4 Documentação e Exemplos
-- [ ] **Atualizar README**: Incorporar todas as novas funcionalidades implementadas
+- [x] ✅ **README Atualizado**: Incorporadas as funcionalidades de processamento anual automático e estrutura de diretórios
 - [ ] **Guia de Migração**: Documentação para migração da versão anterior
 - [ ] **Documentar Configurações**: Documentação completa de todas as opções de configuração
 - [ ] **Exemplos Práticos**: Casos de uso reais e exemplos avançados

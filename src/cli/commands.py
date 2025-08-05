@@ -235,9 +235,13 @@ def processar(ctx, ano, mes, ano_inicio, mes_inicio, ano_fim, mes_fim, todos_mes
         elif ano and mes:
             click.echo(f"📅 Modo: Mensal ({mes:02d}/{ano})")
             items = _create_single_item(ano, mes, stages)
+        elif ano and not mes:
+            # Se apenas ano for fornecido, processar todos os meses
+            click.echo(f"📅 Modo: Todos os meses ({ano}) - mês não especificado")
+            items = _create_year_items(ano, stages)
         else:
             raise ValidationError(
-                "Especifique: --ano e --mes, ou --ano e --todos-meses, ou faixa com --ano-inicio/mes-inicio/ano-fim/mes-fim"
+                "Especifique: --ano (processa todos os meses), --ano e --mes (mês específico), ou faixa com --ano-inicio/mes-inicio/ano-fim/mes-fim"
             )
         
         # Executar validações centralizadas

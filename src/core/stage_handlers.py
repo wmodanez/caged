@@ -17,6 +17,7 @@ from src.core.pipeline import PipelineStageHandler, ProcessingItem, ProcessingRe
 from src.core.exceptions import PipelineError
 from src.utils.cache import cache_manager
 from src.utils.logger import setup_logger
+from src.services.ftp_service import FTPService, FTPConfig
 
 
 class DownloadStageHandler(PipelineStageHandler):
@@ -25,6 +26,17 @@ class DownloadStageHandler(PipelineStageHandler):
     def __init__(self, config: CAGEDConfig, logger: logging.Logger):
         super().__init__(config, logger)
         self.ftp_config = config.ftp
+        # Inicializar serviço FTP real
+        ftp_config = FTPConfig.from_config({
+            'host': self.ftp_config.server,
+            'port': 21,
+            'username': 'anonymous',
+            'password': 'anonymous@example.com',
+            'base_path': self.ftp_config.directory,
+            'timeout': self.ftp_config.timeout,
+            'max_retries': self.ftp_config.max_retries
+        })
+        self.ftp_service = FTPService(ftp_config)
     
     async def process(self, item: ProcessingItem) -> ProcessingResult:
         """Processa download de arquivos"""
@@ -49,12 +61,30 @@ class DownloadStageHandler(PipelineStageHandler):
                     warnings=["Arquivo obtido do cache"]
                 )
             
-            # Simular download (implementação real seria aqui)
-            await asyncio.sleep(0.5)  # Simular tempo de download
-            
-            # Simular arquivo baixado
+            # Download real usando FTPService
             filename = f"CAGEDMOV{item.ano}{item.mes:02d}.7z"
-            file_size = 50 * 1024 * 1024  # 50MB simulado
+            dest_path = Path(f"./files-zip/{filename}")
+            
+            # Conectar ao servidor FTP
+            await asyncio.get_event_loop().run_in_executor(None, self.ftp_service.connect)
+            
+            # Fazer download do arquivo
+            download_result = await asyncio.get_event_loop().run_in_executor(
+                None, 
+                self.ftp_service.download_file, 
+                item.ano,
+                item.mes,
+                dest_path
+            )
+            
+            if not download_result:
+                raise Exception(f"Falha no download do arquivo {filename}")
+            
+            # Obter tamanho real do arquivo baixado
+            file_size = dest_path.stat().st_size if dest_path.exists() else 0
+            
+            # Desconectar do servidor FTP
+            await asyncio.get_event_loop().run_in_executor(None, self.ftp_service.disconnect)
             
             # Cachear resultado
             cache_manager.cache_item(
@@ -89,7 +119,7 @@ class DownloadStageHandler(PipelineStageHandler):
     
     def validate_item(self, item: ProcessingItem) -> bool:
         """Valida se o item pode ser baixado"""
-        # Verificar se ano/mês são válidos
+        # Verificar se ano/mês são válidos (novo CAGED disponível a partir de 2020)
         if item.ano < 2020 or item.ano > 2030:
             return False
         if item.mes < 1 or item.mes > 12:

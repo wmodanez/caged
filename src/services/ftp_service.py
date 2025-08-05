@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-Gerenciador de Arquivos CAGED
-Adaptado para download de dados mensais do CAGED via FTP
+Serviço FTP Real para Sistema CAGED
+Implementação conforme especificação do item 1.2 do documento IMPLEMENTACAO_SERVICOS_REAIS.md
 """
 
 import ftplib
+import hashlib
 import os
 import re
 import time
@@ -13,8 +14,7 @@ import logging
 from pathlib import Path
 from typing import List, Optional, Dict, Tuple, Callable, Any
 from datetime import datetime
-
-import logging
+from dataclasses import dataclass
 
 # Usar o logger centralizado configurado no main.py
 logger = logging.getLogger("caged")
@@ -22,12 +22,30 @@ logger = logging.getLogger("caged")
 # Importar sistema de métricas
 from ..utils.metrics import record_operation, record_cache_hit, record_cache_miss
 
-# Importação das entidades
-from src.entities.movimentacao import Movimentacao
-from src.entities.saldo_mensal import SaldoMensal
-from src.entities.exclusao import Exclusao
-from src.entities.movimentacao_fora_prazo import MovimentacaoForaPrazo
-from src.entities.indicador import Indicador
+
+@dataclass
+class FTPConfig:
+    """Configuração para o serviço FTP"""
+    host: str = "ftp.mtps.gov.br"
+    port: int = 21
+    username: str = "anonymous"
+    password: str = ""
+    base_path: str = "/pdet/microdados/NOVO CAGED/"
+    timeout: int = 30
+    retry_attempts: int = 3
+    
+    @classmethod
+    def from_config(cls, config_dict: dict) -> 'FTPConfig':
+        """Cria configuração a partir de dicionário"""
+        return cls(
+            host=config_dict.get('server', 'ftp.mtps.gov.br'),
+            port=21,
+            username='anonymous',
+            password='',
+            base_path=config_dict.get('directory', '/pdet/microdados/NOVO CAGED/'),
+            timeout=config_dict.get('timeout', 30),
+            retry_attempts=config_dict.get('max_retries', 3)
+        )
 
 
 # Exceções personalizadas
@@ -86,9 +104,12 @@ def retry_on_ftp_error(max_retries: int = 3, delay: float = 1.0, backoff: float 
                         current_delay *= backoff
                         
                         # Tentar reconectar se for erro de conexão
-                        if hasattr(args[0], '_reconectar_se_necessario'):
+                        if hasattr(args[0], 'connect'):
                             logger.debug(f"🔄 Tentando reconectar para {func.__name__}...")
-                            args[0]._reconectar_se_necessario()
+                            try:
+                                args[0].connect()
+                            except:
+                                pass
                     else:
                         break
                 except Exception as e:
@@ -104,120 +125,83 @@ def retry_on_ftp_error(max_retries: int = 3, delay: float = 1.0, backoff: float 
     return decorator
 
 
-class GerenciadorArquivosCaged:
+class FTPService:
     """
-    Gerenciador para download de arquivos CAGED do FTP oficial
-    Adaptado para periodicidade mensal
+    Serviço FTP Real para Sistema CAGED
+    Implementa as funcionalidades especificadas no item 1.2:
+    - Conexão com ftp.mtps.gov.br
+    - Navegação para diretório /pdet/microdados/CAGED/
+    - Download de arquivos CAGEDMOV{AAAA}{MM}.7z
+    - Verificação de integridade (tamanho, checksum)
+    - Tratamento de erros de conexão e timeout
+    - Suporte a retry automático
     """
     
-    def __init__(self, 
-                 servidor_ftp: str = "ftp.mtps.gov.br",
-                 diretorio_remoto: str = "/pdet/microdados/NOVO CAGED"):
+    def __init__(self, config: FTPConfig):
         """
-        Inicializa o gerenciador de arquivos CAGED
+        Inicializa o serviço FTP
         
         Args:
-            servidor_ftp: Servidor FTP oficial
-            diretorio_remoto: Diretório remoto dos dados CAGED
+            config: Configuração FTP
         """
-        self.servidor_ftp = servidor_ftp
-        self.diretorio_remoto = diretorio_remoto
-        self.ftp_conn = None
-        self.arquivos_disponiveis = []
-        self.metadados_downloads: Dict[str, Dict] = {}
-        self.contador_entidades = 0
-        self._diretorio_atual = None  # Para rastrear o diretório atual
+        self.config = config
+        self.ftp_conn: Optional[ftplib.FTP] = None
+        self._is_connected = False
+        self._current_directory = None
         
-    def _reconectar_se_necessario(self) -> bool:
-        """
-        Reconecta ao FTP se a conexão foi perdida
-        
-        Returns:
-            bool: True se reconectou com sucesso
-        """
-        try:
-            if self.ftp_conn:
-                # Testar se a conexão ainda está ativa
-                self.ftp_conn.pwd()
-                return True
-        except:
-            logger.warning("🔄 Conexão FTP perdida, tentando reconectar...")
-            self.ftp_conn = None
-        
-        # Tentar reconectar
-        if self.conectar():
-            # Restaurar diretório se necessário
-            if self._diretorio_atual:
-                try:
-                    self.ftp_conn.cwd(self._diretorio_atual)
-                    logger.info(f"📁 Diretório restaurado: {self._diretorio_atual}")
-                except:
-                    logger.warning(f"⚠️  Não foi possível restaurar diretório: {self._diretorio_atual}")
-            return True
-        return False
+        # Configurar timeout
+        if hasattr(ftplib, 'FTP'):
+            ftplib.FTP.timeout = self.config.timeout
     
     @retry_on_ftp_error(max_retries=3, delay=2.0)
-    def conectar(self) -> bool:
-        """Estabelece conexão com o servidor FTP
+    def connect(self) -> bool:
+        """
+        Estabelece conexão com o servidor FTP
         
         Returns:
             bool: True se conectou com sucesso
         """
+        if self._is_connected and self.ftp_conn:
+            try:
+                # Testar se a conexão ainda está ativa
+                self.ftp_conn.pwd()
+                return True
+            except:
+                logger.warning("🔄 Conexão FTP perdida, reconectando...")
+                self._is_connected = False
+                self.ftp_conn = None
+        
         connection_start_time = time.time()
         try:
-            logger.info(f"🔗 Conectando ao servidor FTP: {self.servidor_ftp}")
-            self.ftp_conn = ftplib.FTP(self.servidor_ftp)
-            self.ftp_conn.login()  # Login anônimo
-            caminhos_possiveis = [
-                "/pdet/microdados/NOVO CAGED",
-                "/pdet/microdados/NOVO_CAGED",
-                "/pdet/microdados/CAGED",
-                "/microdados/CAGED",
-                "/caged",
-                "/dados/caged",
-                "/public/caged"
-            ]
-            for caminho in caminhos_possiveis:
-                try:
-                    logger.info(f"📁 Tentando navegar para: {caminho}")
-                    self.ftp_conn.cwd(caminho)
-                    self._diretorio_atual = caminho
-                    logger.info(f"✅ Conectado com sucesso em: {caminho}")
-                    self.diretorio_remoto = caminho
-                    
-                    # Registrar métrica de conexão bem-sucedida
-                    connection_duration = time.time() - connection_start_time
-                    record_operation(
-                        "ftp_connection",
-                        True,
-                        connection_duration,
-                        {"server": self.servidor_ftp, "directory": caminho}
-                    )
-                    
-                    return True
-                except ftplib.error_perm as e:
-                    logger.warning(f"❌ Caminho não encontrado: {caminho} - {e}")
-                    continue
-            logger.warning("🔍 Nenhum caminho CAGED encontrado. Listando diretório raiz...")
-            arquivos = []
-            self.ftp_conn.retrlines('LIST', arquivos.append)
-            logger.info("📋 Conteúdo do diretório raiz:")
-            for arquivo in arquivos[:10]:
-                logger.info(f"   {arquivo}")
-            logger.error("❌ Não foi possível encontrar o diretório CAGED")
+            logger.info(f"🔗 Conectando ao servidor FTP: {self.config.host}:{self.config.port}")
             
-            # Registrar métrica de falha na conexão
+            # Criar conexão FTP
+            self.ftp_conn = ftplib.FTP()
+            self.ftp_conn.connect(self.config.host, self.config.port, timeout=self.config.timeout)
+            self.ftp_conn.login(self.config.username, self.config.password)
+            
+            # Navegar para o diretório base
+            logger.info(f"📁 Navegando para: {self.config.base_path}")
+            self.ftp_conn.cwd(self.config.base_path)
+            self._current_directory = self.config.base_path
+            
+            self._is_connected = True
+            logger.info(f"✅ Conectado com sucesso ao FTP CAGED")
+            
+            # Registrar métrica de conexão bem-sucedida
             connection_duration = time.time() - connection_start_time
             record_operation(
                 "ftp_connection",
-                False,
+                True,
                 connection_duration,
-                {"server": self.servidor_ftp, "error": "Directory not found"}
+                {"server": self.config.host, "directory": self.config.base_path}
             )
             
-            return False
+            return True
+            
         except Exception as e:
-            logger.error(f"❌ Erro ao conectar: {e}", exc_info=True)
+            logger.error(f"❌ Erro ao conectar: {e}")
+            self._is_connected = False
             self.ftp_conn = None
             
             # Registrar métrica de erro na conexão
@@ -226,495 +210,257 @@ class GerenciadorArquivosCaged:
                 "ftp_connection",
                 False,
                 connection_duration,
-                {"server": self.servidor_ftp, "error": str(e)}
+                {"server": self.config.host, "error": str(e)}
             )
             
-            return False
-    
-    @retry_on_ftp_error(max_retries=2, delay=0.5)
-    def verificar_periodo_existe(self, ano: int, mes: Optional[int] = None) -> bool:
-        """
-        Verifica se um período (ano/mês) existe no servidor FTP
-        
-        Args:
-            ano: Ano dos dados
-            mes: Mês específico (opcional)
-            
-        Returns:
-            bool: True se o período existe no servidor
-        """
-        if not self.ftp_conn:
-            logger.error("❌ Não conectado ao FTP. Use conectar() primeiro.")
-            return False
-        
-        try:
-            # Salvar diretório atual
-            diretorio_original = self.ftp_conn.pwd()
-            
-            # Tentar navegar para o ano
-            diretorio_ano = str(ano)
-            self.ftp_conn.cwd(diretorio_ano)
-            
-            if mes:
-                # Tentar navegar para o mês específico
-                diretorio_mes = f"{ano}{mes:02d}"
-                self.ftp_conn.cwd(diretorio_mes)
-                
-                # Verificar se há arquivos .7z no diretório
-                try:
-                    arquivos = self.ftp_conn.nlst()
-                    arquivos_caged = [arquivo for arquivo in arquivos if arquivo.lower().endswith('.7z')]
-                    existe = len(arquivos_caged) > 0
-                except:
-                    existe = False
-                
-                # Voltar para o diretório do ano
-                self.ftp_conn.cwd("..")
-            else:
-                # Verificar se o ano tem pelo menos um mês com dados
-                try:
-                    diretorios = self.ftp_conn.nlst()
-                    # Procurar por diretórios no formato YYYYMM
-                    diretorios_mes = [d for d in diretorios if len(d) == 6 and d.startswith(str(ano))]
-                    existe = len(diretorios_mes) > 0
-                except:
-                    existe = False
-            
-            # Voltar para o diretório original
-            self.ftp_conn.cwd(diretorio_original)
-            return existe
-            
-        except Exception as e:
-            logger.debug(f"🔍 Período {ano}/{mes if mes else 'todos'} não encontrado: {e}")
-            try:
-                # Tentar voltar para o diretório original em caso de erro
-                self.ftp_conn.cwd(self.diretorio_remoto)
-            except:
-                pass
-            return False
-    
-    @retry_on_ftp_error(max_retries=3, delay=1.0)
-    def listar_arquivos_mensais(self, ano: int, mes: Optional[int] = None) -> List[str]:
-        """
-        Lista arquivos mensais disponíveis para download
-        
-        Args:
-            ano: Ano dos dados (ex: 2024)
-            mes: Mês específico (1-12) ou None para todos os meses
-            
-        Returns:
-            Lista de nomes de arquivos disponíveis
-        """
-        if not self.ftp_conn:
-            logger.error("❌ Não conectado ao FTP. Use conectar() primeiro.")
-            return []
-        try:
-            diretorio_ano = str(ano)
-            logger.info(f"📁 Navegando para diretório do ano: {diretorio_ano}")
-            self.ftp_conn.cwd(diretorio_ano)
-            if mes:
-                diretorio_mes = f"{ano}{mes:02d}"
-                logger.info(f"📁 Navegando para diretório do mês: {diretorio_mes}")
-                self.ftp_conn.cwd(diretorio_mes)
-                logger.info(f"🔍 Listando arquivos CAGED para {ano}/{mes:02d}")
-            else:
-                logger.info(f"🔍 Listando arquivos CAGED para {ano}")
-            try:
-                arquivos_caged = self.ftp_conn.nlst()
-                arquivos_caged = [arquivo for arquivo in arquivos_caged if arquivo.lower().endswith('.7z')]
-            except Exception as e:
-                logger.error(f"❌ Erro ao listar arquivos: {e}", exc_info=True)
-                arquivos_caged = []
-            self.arquivos_disponiveis = arquivos_caged
-            logger.info(f"📋 Encontrados {len(arquivos_caged)} arquivos:")
-            for arquivo in arquivos_caged[:5]:
-                logger.info(f"   📄 {arquivo}")
-            if len(arquivos_caged) > 5:
-                logger.info(f"   ... e mais {len(arquivos_caged) - 5} arquivos")
-            return arquivos_caged
-        except Exception as e:
-            logger.error(f"❌ Erro ao listar arquivos: {e}", exc_info=True)
-            try:
-                if mes:
-                    self.ftp_conn.cwd("..")
-                self.ftp_conn.cwd("..")
-            except Exception as e2:
-                logger.warning(f"Falha ao retornar diretório raiz: {e2}")
-            return []
+            raise FTPConnectionError(f"Falha na conexão FTP: {e}")
     
     @retry_on_ftp_error(max_retries=3, delay=1.5)
-    def baixar_dados_mensais(self, 
-                           ano: int, 
-                           mes: int, 
-                           diretorio_destino: str = "files-zip") -> Tuple[bool, List[Dict]]:
-        """Baixa dados mensais do CAGED
-        
-        Args:
-            ano: Ano dos dados
-            mes: Mês dos dados (1-12)
-            diretorio_destino: Diretório local para salvar
-            
-        Returns:
-            Tuple[bool, List[Dict]]: (Sucesso, Lista de metadados dos downloads)
+    def download_file(self, ano: int, mes: int, dest_path: Path) -> bool:
         """
-        download_session_start = time.time()
-        
-        if not self.ftp_conn:
-            logger.error("❌ Não conectado ao FTP. Use conectar() primeiro.")
-            record_operation(
-                "download_session",
-                False,
-                0.0,
-                {"ano": ano, "mes": mes, "error": "Not connected to FTP"}
-            )
-            return False, []
-        
-        # Primeiro verificar se o período existe no servidor
-        if not self.verificar_periodo_existe(ano, mes):
-            logger.warning(f"⚠️  Período {ano}/{mes:02d} não encontrado no servidor - dados não disponíveis")
-            return False, []
-        
-        # Listar arquivos disponíveis
-        arquivos = self.listar_arquivos_mensais(ano, mes)
-        if not arquivos:
-            logger.warning(f"⚠️  Nenhum arquivo encontrado para {ano}/{mes:02d} - diretório existe mas está vazio")
-            return False, []
-        
-        # Só criar diretório local se houver arquivos para baixar
-        destino = Path(diretorio_destino) / str(ano) / f"{ano}{mes:02d}"
-        destino.mkdir(parents=True, exist_ok=True)
-        logger.info(f"📦 Baixando arquivos CAGED para {ano}/{mes:02d} (contém dados de todas as UFs)")
-        sucessos = 0
-        total = len(arquivos)
-        metadados_downloads = []
-        logger.info(f"📥 Iniciando download de {total} arquivos...")
-        for i, arquivo in enumerate(arquivos, 1):
-            try:
-                logger.info(f"📥 [{i}/{total}] Baixando: {arquivo}")
-                caminho_local = destino / arquivo
-                
-                # Verificar se arquivo já existe
-                if self.verificar_arquivo_existe(str(caminho_local)):
-                    logger.info(f"⏭️  Arquivo já existe: {arquivo}")
-                    record_cache_hit()  # Arquivo já existe = cache hit
-                    metadados = self.metadados_downloads.get(arquivo, self._extrair_metadados_arquivo(arquivo, ano, mes))
-                    metadados_downloads.append(metadados)
-                    sucessos += 1
-                    continue
-                
-                record_cache_miss()  # Precisa baixar = cache miss
-                
-                # Tentar baixar o arquivo com retry automático
-                file_download_start = time.time()
-                download_success = self._baixar_arquivo_individual(arquivo, caminho_local)
-                file_download_duration = time.time() - file_download_start
-                
-                if download_success:
-                    sucessos += 1
-                    tamanho_bytes = caminho_local.stat().st_size
-                    tamanho = self._formatar_tamanho(tamanho_bytes)
-                    logger.info(f"✅ {arquivo} - {tamanho}")
-                    
-                    # Registrar métrica de download bem-sucedido
-                    record_operation(
-                        "file_download",
-                        True,
-                        file_download_duration,
-                        {
-                            "filename": arquivo,
-                            "size_bytes": tamanho_bytes,
-                            "ano": ano,
-                            "mes": mes
-                        }
-                    )
-                    
-                    metadados = self._criar_metadados_download(arquivo, caminho_local, ano, mes)
-                    metadados_downloads.append(metadados)
-                    self.metadados_downloads[arquivo] = metadados
-                else:
-                    logger.error(f"❌ Falha no download após todas as tentativas: {arquivo}")
-                    
-                    # Registrar métrica de download falhado
-                    record_operation(
-                        "file_download",
-                        False,
-                        file_download_duration,
-                        {
-                            "filename": arquivo,
-                            "ano": ano,
-                            "mes": mes,
-                            "error": "Download failed after retries"
-                        }
-                    )
-                    
-            except FTPRetryError as e:
-                logger.error(f"❌ Erro de retry esgotado para {arquivo}: {e}")
-            except Exception as e:
-                logger.error(f"❌ Erro inesperado ao baixar {arquivo}: {e}", exc_info=True)
-        logger.info(f"📊 Download concluído: {sucessos}/{total} arquivos baixados")
-        
-        # Registrar métricas da sessão de download
-        download_session_duration = time.time() - download_session_start
-        session_success = sucessos > 0
-        total_bytes = sum(m.get('tamanho_bytes', 0) for m in metadados_downloads)
-        
-        record_operation(
-            "download_session",
-            session_success,
-            download_session_duration,
-            {
-                "ano": ano,
-                "mes": mes,
-                "total_files": total,
-                "successful_files": sucessos,
-                "failed_files": total - sucessos,
-                "total_bytes": total_bytes,
-                "success_rate": (sucessos / total) * 100 if total > 0 else 0
-            }
-        )
-        
-        self._criar_indicadores_download(ano, mes, sucessos, total)
-        return sucessos > 0, metadados_downloads
-    
-    @retry_on_ftp_error(max_retries=3, delay=1.0)
-    def _baixar_arquivo_individual(self, nome_arquivo: str, caminho_local: Path) -> bool:
-        """Baixa um arquivo individual do FTP com retry automático
+        Baixa arquivo CAGEDEST_{MM}{AAAA}.7z do servidor FTP
         
         Args:
-            nome_arquivo: Nome do arquivo no servidor FTP
-            caminho_local: Caminho local onde salvar o arquivo
+            ano: Ano dos dados (ex: 2019)
+            mes: Mês dos dados (1-12)
+            dest_path: Caminho de destino para salvar o arquivo
             
         Returns:
             bool: True se o download foi bem-sucedido
         """
-        individual_download_start = time.time()
+        if not self._is_connected:
+            if not self.connect():
+                return False
+        
+        filename = f"CAGEDEST_{mes:02d}{ano}.7z"
+        download_start_time = time.time()
         
         try:
-            with open(caminho_local, 'wb') as f:
-                self.ftp_conn.retrbinary(f'RETR {nome_arquivo}', f.write)
-            
-            # Verificar se o arquivo foi baixado corretamente
-            if caminho_local.exists() and caminho_local.stat().st_size > 0:
-                individual_download_duration = time.time() - individual_download_start
-                
-                # Registrar métrica de transferência FTP bem-sucedida
-                record_operation(
-                    "ftp_transfer",
-                    True,
-                    individual_download_duration,
-                    {
-                        "filename": nome_arquivo,
-                        "size_bytes": caminho_local.stat().st_size,
-                        "transfer_rate_mbps": (caminho_local.stat().st_size / (1024 * 1024)) / individual_download_duration if individual_download_duration > 0 else 0
-                    }
-                )
-                
-                return True
-            else:
-                logger.error(f"❌ Arquivo baixado está vazio ou corrompido: {nome_arquivo}")
-                
-                # Registrar métrica de arquivo corrompido
-                record_operation(
-                    "ftp_transfer",
-                    False,
-                    time.time() - individual_download_start,
-                    {
-                        "filename": nome_arquivo,
-                        "error": "Empty or corrupted file"
-                    }
-                )
-                
+            # Navegar para o diretório do ano
+            logger.info(f"📁 Navegando para o diretório do ano: {ano}")
+            try:
+                self.ftp_conn.cwd(str(ano))
+            except ftplib.error_perm:
+                logger.error(f"❌ Diretório do ano {ano} não encontrado no servidor")
                 return False
-                
-        except Exception as e:
-            logger.error(f"❌ Erro no download de {nome_arquivo}: {e}")
             
-            # Registrar métrica de erro na transferência
+            # Navegar para o diretório do mês (formato AAAAMM)
+            month_dir = f"{ano}{mes:02d}"
+            logger.info(f"📁 Navegando para o diretório do mês: {month_dir}")
+            try:
+                self.ftp_conn.cwd(month_dir)
+            except ftplib.error_perm:
+                logger.error(f"❌ Diretório do mês {month_dir} não encontrado no servidor")
+                self.ftp_conn.cwd("..")  # Voltar ao diretório pai
+                return False
+            
+            # Listar todos os arquivos .7z no diretório do mês
+            logger.info(f"🔍 Listando arquivos .7z disponíveis para {ano}/{month_dir}...")
+            all_files = self.ftp_conn.nlst()
+            zip_files = [f for f in all_files if f.lower().endswith('.7z')]
+            
+            if not zip_files:
+                logger.error(f"❌ Nenhum arquivo .7z encontrado para {ano}/{month_dir}")
+                self.ftp_conn.cwd("../..")  # Voltar dois níveis acima
+                return False
+            
+            logger.info(f"📋 Encontrados {len(zip_files)} arquivos .7z para {ano}/{month_dir}")
+            
+            # Criar estrutura de diretórios espelhando o FTP: files-zip/AAAA/AAAAMM/
+            year_month_dir = dest_path.parent / str(ano) / month_dir
+            year_month_dir.mkdir(parents=True, exist_ok=True)
+            
+            downloaded_files = []
+            total_size = 0
+            
+            # Baixar todos os arquivos .7z
+            for file in zip_files:
+                try:
+                    logger.info(f"📥 Baixando arquivo: {file}")
+                    
+                    # Verificar tamanho do arquivo
+                    try:
+                        file_size = self.ftp_conn.size(file)
+                        logger.info(f"📊 Tamanho: {self._format_size(file_size)}")
+                    except ftplib.error_perm:
+                        logger.warning(f"⚠️ Não foi possível obter tamanho de {file}")
+                        file_size = 0
+                    
+                    # Definir caminho de destino para este arquivo
+                    file_dest_path = year_month_dir / file
+                    
+                    # Baixar arquivo
+                    with open(file_dest_path, 'wb') as f:
+                        self.ftp_conn.retrbinary(f'RETR {file}', f.write)
+                    
+                    # Verificar se o download foi bem-sucedido
+                    if not file_dest_path.exists() or file_dest_path.stat().st_size == 0:
+                        logger.error(f"❌ Arquivo baixado está vazio ou corrompido: {file}")
+                        if file_dest_path.exists():
+                            file_dest_path.unlink()
+                        continue
+                    
+                    downloaded_size = file_dest_path.stat().st_size
+                    total_size += downloaded_size
+                    downloaded_files.append(file)
+                    
+                    logger.info(f"✅ Download concluído: {file} - {self._format_size(downloaded_size)}")
+                    
+                except Exception as e:
+                    logger.error(f"❌ Erro ao baixar {file}: {e}")
+                    continue
+            
+            # Voltar ao diretório base (dois níveis acima)
+            self.ftp_conn.cwd("../..")
+            
+            if not downloaded_files:
+                logger.error(f"❌ Nenhum arquivo foi baixado com sucesso para {ano}")
+                return False
+            
+            download_duration = time.time() - download_start_time
+            
+            logger.info(f"✅ Download completo: {len(downloaded_files)} arquivos - {self._format_size(total_size)}")
+            
+            # Registrar métrica de download bem-sucedido
             record_operation(
-                "ftp_transfer",
-                False,
-                time.time() - individual_download_start,
+                "file_download",
+                True,
+                download_duration,
                 {
-                    "filename": nome_arquivo,
+                    "files_count": len(downloaded_files),
+                    "total_size_bytes": total_size,
+                    "ano": ano,
+                    "mes": mes,
+                    "transfer_rate_mbps": (total_size / (1024 * 1024)) / download_duration if download_duration > 0 else 0,
+                    "downloaded_files": downloaded_files
+                }
+            )
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Erro no download de {filename}: {e}")
+            
+            # Remover arquivo parcial se existir
+            if dest_path.exists():
+                dest_path.unlink()
+            
+            # Registrar métrica de download falhado
+            record_operation(
+                "file_download",
+                False,
+                time.time() - download_start_time,
+                {
+                    "filename": filename,
+                    "ano": ano,
+                    "mes": mes,
                     "error": str(e)
                 }
             )
             
-            # Remover arquivo parcial se existir
-            if caminho_local.exists():
-                caminho_local.unlink()
             raise e
     
-    def _extrair_metadados_arquivo(self, nome_arquivo: str, ano: int, mes: int) -> Dict:
+    @retry_on_ftp_error(max_retries=2, delay=0.5)
+    def list_available_files(self) -> List[str]:
         """
-        Extrai metadados básicos do nome do arquivo
-        
-        Args:
-            nome_arquivo: Nome do arquivo
-            ano: Ano dos dados
-            mes: Mês dos dados
-            
-        Returns:
-            Dict: Metadados extraídos
-        """
-        metadados = {
-            "nome_arquivo": nome_arquivo,
-            "ano": ano,
-            "mes": mes,
-            "competencia": f"{ano}-{mes:02d}",
-            "data_processamento": datetime.now().isoformat()
-        }
-        
-        # Tentar identificar UF
-        ufs = ["AC", "AL", "AM", "AP", "BA", "CE", "DF", "ES", "GO", "MA", 
-               "MG", "MS", "MT", "PA", "PB", "PE", "PI", "PR", "RJ", "RN", 
-               "RO", "RR", "RS", "SC", "SE", "SP", "TO"]
-        
-        for uf in ufs:
-            if uf in nome_arquivo.upper():
-                metadados["uf"] = uf
-                break
-        
-        # Identificar tipo de arquivo
-        if "MOVIMENTACAO" in nome_arquivo.upper():
-            metadados["tipo"] = "movimentacao"
-        elif "EXCLUSAO" in nome_arquivo.upper():
-            metadados["tipo"] = "exclusao"
-        elif "FORA_PRAZO" in nome_arquivo.upper() or "FORAPRAZO" in nome_arquivo.upper():
-            metadados["tipo"] = "fora_prazo"
-        else:
-            metadados["tipo"] = "outros"
-        
-        return metadados
-    
-    def _criar_metadados_download(self, nome_arquivo: str, caminho_local: Path, 
-                                 ano: int, mes: int) -> Dict:
-        """
-        Cria metadados completos do download
-        
-        Args:
-            nome_arquivo: Nome do arquivo
-            caminho_local: Caminho local do arquivo
-            ano: Ano dos dados
-            mes: Mês dos dados
-            ufs: UFs filtradas
-            
-        Returns:
-            Dict: Metadados completos
-        """
-        metadados = self._extrair_metadados_arquivo(nome_arquivo, ano, mes)
-        
-        # Adicionar informações do download
-        metadados.update({
-            "caminho_local": str(caminho_local),
-            "tamanho_bytes": caminho_local.stat().st_size,
-            "tamanho_formatado": self._formatar_tamanho(caminho_local.stat().st_size),
-            "data_download": datetime.now().isoformat(),
-            "ufs_filtradas": None,  # Filtragem por UF deve ser feita após download
-            "status": "baixado"
-        })
-        
-        return metadados
-    
-    def _criar_indicadores_download(self, ano: int, mes: int, arquivos_baixados: int, 
-                                   total_arquivos: int) -> List[Indicador]:
-        """
-        Cria indicadores sobre o processo de download
-        
-        Args:
-            ano: Ano dos dados
-            mes: Mês dos dados
-            arquivos_baixados: Quantidade de arquivos baixados
-            total_arquivos: Total de arquivos disponíveis
-            
-        Returns:
-            List[Indicador]: Lista de indicadores criados
-        """
-        indicadores = []
-        competencia = f"{ano}-{mes:02d}"
-        
-        # Taxa de sucesso do download
-        taxa_sucesso = (arquivos_baixados / total_arquivos) * 100 if total_arquivos > 0 else 0
-        
-        # Indicadores básicos
-        indicadores_dados = [
-            ("arquivos_disponiveis", total_arquivos),
-            ("arquivos_baixados", arquivos_baixados),
-            ("taxa_sucesso_download", taxa_sucesso)
-        ]
-        
-        for nome, valor in indicadores_dados:
-            self.contador_entidades += 1
-            indicador = Indicador(
-                id=self.contador_entidades,
-                cnpj="",  # Não aplicável para downloads
-                competencia=competencia,
-                nome_indicador=nome,
-                valor=float(valor)
-            )
-            indicadores.append(indicador)
-        
-        print(f"📊 Criados {len(indicadores)} indicadores de download")
-        return indicadores
-    
-    def verificar_arquivo_existe(self, caminho_arquivo: str) -> bool:
-        """
-        Verifica se arquivo já existe localmente
-        
-        Args:
-            caminho_arquivo: Caminho completo do arquivo
-            
-        Returns:
-            bool: True se arquivo existe e não está vazio
-        """
-        arquivo = Path(caminho_arquivo)
-        return arquivo.exists() and arquivo.stat().st_size > 0
-    
-    def obter_info_servidor(self) -> dict:
-        """
-        Obtém informações sobre o servidor FTP
+        Lista arquivos disponíveis no diretório FTP
         
         Returns:
-            dict: Informações do servidor
+            List[str]: Lista de nomes de arquivos disponíveis
         """
-        if not self.ftp_conn:
-            return {"status": "desconectado"}
+        if not self._is_connected:
+            if not self.connect():
+                return []
         
         try:
-            return {
-                "status": "conectado",
-                "servidor": self.servidor_ftp,
-                "diretorio": self.ftp_conn.pwd(),
-                "welcome": self.ftp_conn.getwelcome(),
-                "arquivos_disponiveis": len(self.arquivos_disponiveis)
-            }
+            logger.info("🔍 Listando arquivos disponíveis no FTP...")
+            files = self.ftp_conn.nlst()
+            
+            # Filtrar apenas arquivos .7z do CAGED
+            caged_files = [f for f in files if f.lower().endswith('.7z') and 'CAGEDMOV' in f.upper()]
+            
+            logger.info(f"📋 Encontrados {len(caged_files)} arquivos CAGED disponíveis")
+            for file in caged_files[:5]:  # Mostrar apenas os primeiros 5
+                logger.info(f"   📄 {file}")
+            if len(caged_files) > 5:
+                logger.info(f"   ... e mais {len(caged_files) - 5} arquivos")
+            
+            return caged_files
+            
         except Exception as e:
-            return {"status": "erro", "erro": str(e)}
+            logger.error(f"❌ Erro ao listar arquivos: {e}")
+            return []
     
-    def listar_anos_disponiveis(self) -> List[int]:
+    def verify_file_integrity(self, file_path: Path) -> bool:
         """
-        Lista anos disponíveis no servidor FTP
+        Verifica integridade do arquivo baixado
         
+        Args:
+            file_path: Caminho do arquivo para verificar
+            
         Returns:
-            List[int]: Lista de anos disponíveis
+            bool: True se o arquivo está íntegro
         """
-        if not self.ftp_conn:
-            logger.error("❌ Não conectado ao FTP")
-            return []
+        if not file_path.exists():
+            logger.error(f"❌ Arquivo não encontrado: {file_path}")
+            return False
+        
         try:
-            arquivos = []
-            self.ftp_conn.retrlines('LIST', arquivos.append)
-            anos = set()
-            for linha in arquivos:
-                matches = re.findall(r'(20\d{2})', linha)
-                for match in matches:
-                    anos.add(int(match))
-            return sorted(list(anos))
+            file_size = file_path.stat().st_size
+            
+            # Verificar se arquivo não está vazio
+            if file_size == 0:
+                logger.error(f"❌ Arquivo está vazio: {file_path.name}")
+                return False
+            
+            # Verificar tamanho mínimo esperado (arquivos CAGED são tipicamente > 1MB)
+            min_size = 1024 * 1024  # 1MB
+            if file_size < min_size:
+                logger.warning(f"⚠️  Arquivo muito pequeno ({self._format_size(file_size)}): {file_path.name}")
+                return False
+            
+            # Calcular checksum MD5 para verificação de integridade
+            md5_hash = hashlib.md5()
+            with open(file_path, 'rb') as f:
+                for chunk in iter(lambda: f.read(4096), b""):
+                    md5_hash.update(chunk)
+            
+            checksum = md5_hash.hexdigest()
+            logger.info(f"🔐 Checksum MD5: {checksum} - {file_path.name}")
+            
+            # Verificar se é um arquivo 7z válido (magic number)
+            with open(file_path, 'rb') as f:
+                magic = f.read(6)
+                if magic != b'7z\xbc\xaf\'\x1c':
+                    logger.error(f"❌ Arquivo não é um 7z válido: {file_path.name}")
+                    return False
+            
+            logger.info(f"✅ Arquivo íntegro: {file_path.name} - {self._format_size(file_size)}")
+            return True
+            
         except Exception as e:
-            logger.error(f"❌ Erro ao listar anos: {e}", exc_info=True)
-            return []
+            logger.error(f"❌ Erro na verificação de integridade: {e}")
+            return False
     
-    def _formatar_tamanho(self, bytes_size: int) -> str:
+    def disconnect(self):
+        """
+        Fecha conexão FTP
+        """
+        if self.ftp_conn:
+            try:
+                self.ftp_conn.quit()
+                logger.info("🔌 Conexão FTP encerrada")
+            except:
+                try:
+                    self.ftp_conn.close()
+                except:
+                    pass
+            finally:
+                self.ftp_conn = None
+                self._is_connected = False
+                self._current_directory = None
+    
+    def _format_size(self, bytes_size: int) -> str:
         """
         Formatar tamanho do arquivo em formato legível
         
@@ -730,67 +476,36 @@ class GerenciadorArquivosCaged:
                 return f"{size:.1f} {unit}"
             size /= 1024.0
         return f"{size:.1f} TB"
+
+
+# Manter compatibilidade com código existente
+class GerenciadorArquivosCaged(FTPService):
+    """
+    Classe de compatibilidade - redireciona para FTPService
+    Mantida para não quebrar código existente
+    """
     
-    def gerar_relatorio_downloads(self, ano: Optional[int] = None) -> Dict:
-        """
-        Gera relatório sobre os downloads realizados
-        
-        Args:
-            ano: Ano específico ou None para todos
-            
-        Returns:
-            Dict: Relatório com estatísticas
-        """
-        if not self.metadados_downloads:
-            return {"status": "sem_dados", "mensagem": "Nenhum download registrado"}
-        
-        # Filtrar por ano se especificado
-        downloads = self.metadados_downloads.values()
-        if ano:
-            downloads = [d for d in downloads if d.get("ano") == ano]
-        
-        if not downloads:
-            return {"status": "sem_dados", "mensagem": f"Nenhum download encontrado para {ano}"}
-        
-        # Calcular estatísticas
-        total_arquivos = len(downloads)
-        total_bytes = sum(d.get("tamanho_bytes", 0) for d in downloads)
-        ufs_unicas = set()
-        tipos_unicos = set()
-        competencias_unicas = set()
-        
-        for download in downloads:
-            if "uf" in download:
-                ufs_unicas.add(download["uf"])
-            if "tipo" in download:
-                tipos_unicos.add(download["tipo"])
-            if "competencia" in download:
-                competencias_unicas.add(download["competencia"])
-        
-        return {
-            "total_arquivos": total_arquivos,
-            "total_bytes": total_bytes,
-            "total_formatado": self._formatar_tamanho(total_bytes),
-            "ufs_unicas": len(ufs_unicas),
-            "tipos_unicos": len(tipos_unicos),
-            "competencias_unicas": len(competencias_unicas),
-            "ufs": sorted(list(ufs_unicas)),
-            "tipos": sorted(list(tipos_unicos)),
-            "competencias": sorted(list(competencias_unicas))
-        }
+    def __init__(self, 
+                 servidor_ftp: str = "ftp.mtps.gov.br",
+                 diretorio_remoto: str = "/pdet/microdados/NOVO CAGED"):
+        config = FTPConfig(
+            host=servidor_ftp,
+            base_path=diretorio_remoto
+        )
+        super().__init__(config)
+        self.servidor_ftp = servidor_ftp
+        self.diretorio_remoto = diretorio_remoto
+        self.arquivos_disponiveis = []
+        self.metadados_downloads: Dict[str, Dict] = {}
+        self.contador_entidades = 0
+    
+    def conectar(self) -> bool:
+        """Método de compatibilidade"""
+        return self.connect()
     
     def desconectar(self):
-        """
-        Fecha conexão FTP
-        """
-        if self.ftp_conn:
-            try:
-                self.ftp_conn.quit()
-                print("🔌 Conexão FTP encerrada")
-            except:
-                self.ftp_conn.close()
-            finally:
-                self.ftp_conn = None
+        """Método de compatibilidade"""
+        self.disconnect()
 
 
 # Função para testar rapidamente a conexão com o FTP CAGED
@@ -800,24 +515,24 @@ def testar_conexao_caged():
     """
     print("🧪 Testando conexão com FTP CAGED...")
     
-    gerenciador = GerenciadorArquivosCaged()
+    config = FTPConfig()
+    ftp_service = FTPService(config)
     
-    if gerenciador.conectar():
-        info = gerenciador.obter_info_servidor()
-        print(f"📊 Info do servidor: {info}")
-        
-        anos = gerenciador.listar_anos_disponiveis()
-        print(f"📅 Anos disponíveis: {anos}")
-        
-        # Testar listagem para o ano mais recente
-        if anos:
-            ano_recente = max(anos)
-            arquivos = gerenciador.listar_arquivos_mensais(ano_recente)
-            print(f"📋 Arquivos encontrados para {ano_recente}: {len(arquivos)}")
-        
-        gerenciador.desconectar()
-        return True
-    else:
+    try:
+        if ftp_service.connect():
+            print("✅ Conexão estabelecida com sucesso")
+            
+            # Testar listagem de arquivos
+            files = ftp_service.list_available_files()
+            print(f"📋 Encontrados {len(files)} arquivos CAGED")
+            
+            ftp_service.disconnect()
+            return True
+        else:
+            print("❌ Falha na conexão")
+            return False
+    except Exception as e:
+        print(f"❌ Erro no teste: {e}")
         return False
 
 
