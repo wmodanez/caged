@@ -210,6 +210,8 @@ docs/
 logs/
 files-zip/
 files-unzip/
-parquet/
+files-parquet/
 cache/
 examples/
+
+state.json

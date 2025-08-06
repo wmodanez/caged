@@ -23,6 +23,11 @@ class ValidationError(CAGEDException):
     pass
 
 
+class FileValidationError(ValidationError):
+    """Erro de validação de arquivos"""
+    pass
+
+
 class FTPError(CAGEDException):
     """Erro relacionado a operações FTP"""
     pass

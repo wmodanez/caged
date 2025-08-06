@@ -76,7 +76,7 @@ python main.py processar --ano 2024 --mes 1 --download
 python main.py processar --ano 2024 --mes 1 --extract
 
 # Apenas conversão
-python main.py processar --ano 2024 --mes 1 --apenas-conversao
+python main.py processar --ano 2024 --mes 1 --convert
 
 # Pular etapas específicas
 python main.py processar --ano 2024 --mes 1 --pular-download --pular-extracao

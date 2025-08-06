@@ -26,6 +26,12 @@ class TestConvertService:
     """Testes para ConvertService"""
     
     @pytest.fixture
+    def temp_dir(self):
+        """Diretório temporário para testes"""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            yield Path(tmp_dir)
+    
+    @pytest.fixture
     def convert_service(self):
         """Instância do serviço de conversão"""
         return ConvertService()

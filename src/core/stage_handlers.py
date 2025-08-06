@@ -243,6 +243,9 @@ class ConvertStageHandler(PipelineStageHandler):
     def __init__(self, config: CAGEDConfig, logger: logging.Logger):
         super().__init__(config, logger)
         self.output_config = config.output
+        # Inicializar ConvertService
+        from ..services.convert_service import ConvertService
+        self.convert_service = ConvertService(config)
     
     async def process(self, item: ProcessingItem) -> ProcessingResult:
         """Processa conversão de arquivos"""
@@ -256,31 +259,69 @@ class ConvertStageHandler(PipelineStageHandler):
             
             if cache_manager.has_cached_item(cache_key):
                 self.logger.info(f"💾 Usando arquivos convertidos em cache para {item.id}")
+                cached_data = cache_manager.get_cached_item(cache_key)
                 duration = time.time() - start_time
                 
                 return ProcessingResult(
                     item=item,
                     success=True,
                     duration=duration,
-                    files_processed=3,
-                    bytes_processed=0,
+                    files_processed=len(cached_data.get("files", [])),
+                    bytes_processed=cached_data.get("total_size", 0),
                     warnings=["Arquivos obtidos do cache"]
                 )
             
-            # Simular conversão
-            await asyncio.sleep(0.7)  # Simular tempo de conversão
+            # Encontrar arquivos extraídos para conversão
+            from pathlib import Path
+            input_dir = Path(f"files-unzip/{item.ano}/{item.mes:02d}")
             
-            # Simular arquivos convertidos
-            output_format = self.output_config.format.lower()
-            converted_files = [
-                f"CAGEDMOV{item.ano}{item.mes:02d}.{output_format}",
-                f"CAGEDFOR{item.ano}{item.mes:02d}.{output_format}",
-                f"CAGEDEXC{item.ano}{item.mes:02d}.{output_format}"
-            ]
+            # Se o diretório padrão não existir, tentar o diretório alternativo
+            if not input_dir.exists():
+                alt_input_dir = Path(f"files-unzip/{item.ano}/{item.ano}{item.mes:02d}")
+                if alt_input_dir.exists():
+                    input_dir = alt_input_dir
+                else:
+                    raise PipelineError(f"Diretório de entrada não encontrado: {input_dir} ou {alt_input_dir}")
+                
+            # Encontrar arquivos TXT/CSV para conversão
+            input_files = list(input_dir.glob("*.txt")) + list(input_dir.glob("*.csv"))
+            if not input_files:
+                raise PipelineError(f"Nenhum arquivo TXT/CSV encontrado em {input_dir}")
             
-            # Tamanho varia baseado na compressão
-            compression_factor = 0.3 if self.output_config.compression == "snappy" else 0.5
-            total_size = int(150 * 1024 * 1024 * compression_factor)
+            # Preparar diretório de saída (formato ano/anomes)
+            output_dir = Path(f"files-parquet/{item.ano}/{item.ano}{item.mes:02d}")
+            output_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Converter cada arquivo
+            converted_files = []
+            total_size = 0
+            
+            for input_file in input_files:
+                # Definir arquivo de saída
+                output_file = output_dir / f"{input_file.stem}.{self.output_config.format.lower()}"
+                
+                # Converter arquivo
+                self.logger.info(f"Convertendo {input_file} para {output_file}")
+                success = await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    self.convert_service.convert_to_parquet,
+                    str(input_file),
+                    str(output_file),
+                    None,  # schema
+                    self.output_config.compression,
+                    None,  # progress_callback
+                    True,  # auto_detect_encoding
+                    None,  # chunk_size
+                    None   # validation_rules
+                )
+                
+                if success and output_file.exists():
+                    file_size = output_file.stat().st_size
+                    converted_files.append(str(output_file))
+                    total_size += file_size
+                    self.logger.info(f"✅ Arquivo convertido: {output_file} ({file_size} bytes)")
+                else:
+                    self.logger.warning(f"⚠️ Falha ao converter {input_file}")
             
             # Cachear resultado
             cache_manager.cache_item(
@@ -288,7 +329,7 @@ class ConvertStageHandler(PipelineStageHandler):
                 {
                     "files": converted_files, 
                     "total_size": total_size,
-                    "format": output_format,
+                    "format": self.output_config.format.lower(),
                     "compression": self.output_config.compression
                 },
                 category="conversions"
@@ -298,7 +339,7 @@ class ConvertStageHandler(PipelineStageHandler):
             
             self.logger.info(
                 f"✅ Conversão concluída para {item.id}: "
-                f"{len(converted_files)} arquivos {output_format.upper()}"
+                f"{len(converted_files)} arquivos {self.output_config.format.upper()}"
             )
             
             return ProcessingResult(
@@ -325,7 +366,21 @@ class ConvertStageHandler(PipelineStageHandler):
         """Valida se o item pode ser convertido"""
         # Verificar se extração foi feita (ou está em cache)
         extract_cache_key = f"extract_{item.ano}_{item.mes:02d}"
-        return cache_manager.has_cached_item(extract_cache_key)
+        
+        # Verificar cache primeiro
+        if cache_manager.has_cached_item(extract_cache_key):
+            return True
+            
+        # Se não estiver em cache, verificar se os arquivos extraídos existem
+        from pathlib import Path
+        # Verificar o diretório padrão (mês com dois dígitos)
+        input_dir = Path(f"files-unzip/{item.ano}/{item.mes:02d}")
+        if input_dir.exists() and any(input_dir.glob("*.txt") or input_dir.glob("*.csv")):
+            return True
+            
+        # Verificar o diretório alternativo (ano + mês com dois dígitos)
+        alt_input_dir = Path(f"files-unzip/{item.ano}/{item.ano}{item.mes:02d}")
+        return alt_input_dir.exists() and any(alt_input_dir.glob("*.txt") or alt_input_dir.glob("*.csv"))
 
 
 class ValidateStageHandler(PipelineStageHandler):

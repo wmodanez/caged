@@ -4591,6 +4591,481 @@ def testar_conversor():
     return (len(arquivos_txt) + len(arquivos_csv)) > 0
 
 
+# ============================================================================
+# CLASSE CONVERTSERVICE - INTERFACE SIMPLIFICADA
+# ============================================================================
+
+class ConvertService:
+    """
+    Interface simplificada para conversão de arquivos TXT/CSV para Parquet
+    Wrapper em torno do ConversorParquetCaged para compatibilidade com testes
+    """
+    
+    def __init__(self, config=None):
+        """
+        Inicializa o serviço de conversão
+        
+        Args:
+            config: Configuração opcional (não utilizada na implementação atual)
+        """
+        self.config = config
+        self._conversor = ConversorParquetCaged()
+        
+    def convert_to_parquet(self, 
+                          input_file: str, 
+                          output_file: str,
+                          schema: Optional[Dict[str, Any]] = None,
+                          compression: str = "snappy",
+                          progress_callback: Optional[callable] = None,
+                          auto_detect_encoding: bool = True,
+                          chunk_size: Optional[int] = None,
+                          validation_rules: Optional[Dict[str, Any]] = None) -> bool:
+        """
+        Converte um arquivo TXT/CSV para formato Parquet
+        
+        Args:
+            input_file: Caminho do arquivo de entrada
+            output_file: Caminho do arquivo de saída
+            schema: Schema opcional para os dados
+            compression: Tipo de compressão (snappy, gzip, etc.)
+            progress_callback: Callback para progresso
+            auto_detect_encoding: Se deve detectar encoding automaticamente
+            chunk_size: Tamanho do chunk para processamento
+            validation_rules: Regras de validação dos dados
+            
+        Returns:
+            True se a conversão foi bem-sucedida, False caso contrário
+            
+        Raises:
+            FileValidationError: Se o arquivo de entrada não existe ou é inválido
+            ConversionError: Se ocorrer erro durante a conversão
+        """
+        try:
+            # Validar arquivo de entrada
+            input_path = Path(input_file)
+            if not input_path.exists():
+                from src.core.exceptions import FileValidationError
+                raise FileValidationError(f"Arquivo de entrada não encontrado: {input_file}")
+            
+            output_path = Path(output_file)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            # Detectar encoding se necessário
+            encoding = 'utf-8'
+            if auto_detect_encoding:
+                encoding = self._detect_encoding(input_path)
+            
+            # Detectar separador
+            separador = self._detect_separator(input_path, encoding)
+            
+            # Ler arquivo usando polars
+            try:
+                df = pl.read_csv(
+                    input_path,
+                    separator=separador,
+                    encoding=encoding,
+                    ignore_errors=True
+                )
+                
+                if progress_callback:
+                    progress_callback(50)  # 50% - arquivo lido
+                
+                # Aplicar schema se fornecido
+                if schema:
+                    df = self._apply_schema(df, schema)
+                
+                # Aplicar validações se fornecidas
+                if validation_rules:
+                    df = self._apply_validation_rules(df, validation_rules)
+                
+                if progress_callback:
+                    progress_callback(80)  # 80% - dados processados
+                
+                # Salvar como Parquet
+                df.write_parquet(output_path, compression=compression)
+                
+                if progress_callback:
+                    progress_callback(100)  # 100% - concluído
+                
+                logger.info(f"✅ Conversão concluída: {input_file} -> {output_file}")
+                try:
+                    logger.info(f"   📊 Registros: {df.shape[0]:,}")
+                    logger.info(f"   📋 Colunas: {df.shape[1]}")
+                except:
+                    logger.info("   📊 Conversão concluída com sucesso")
+                
+                return True
+                
+            except Exception as e:
+                from src.core.exceptions import ConversionError
+                raise ConversionError(f"Erro na conversão: {str(e)}")
+                
+        except Exception as e:
+            logger.error(f"Erro na conversão de {input_file}: {e}")
+            raise
+    
+    def _detect_encoding(self, file_path: Path) -> str:
+        """
+        Detecta o encoding do arquivo
+        
+        Args:
+            file_path: Caminho do arquivo
+            
+        Returns:
+            Encoding detectado
+        """
+        encodings = ['utf-8', 'latin-1', 'cp1252', 'iso-8859-1']
+        
+        for encoding in encodings:
+            try:
+                with open(file_path, 'r', encoding=encoding) as f:
+                    f.read(1024)  # Ler uma pequena amostra
+                return encoding
+            except UnicodeDecodeError:
+                continue
+        
+        return 'utf-8'  # Fallback
+    
+    def _detect_separator(self, file_path: Path, encoding: str) -> str:
+        """
+        Detecta o separador do arquivo
+        
+        Args:
+            file_path: Caminho do arquivo
+            encoding: Encoding do arquivo
+            
+        Returns:
+            Separador detectado
+        """
+        separators = [';', ',', '\t', '|']
+        
+        try:
+            with open(file_path, 'r', encoding=encoding) as f:
+                first_line = f.readline()
+                
+            # Contar ocorrências de cada separador
+            separator_counts = {sep: first_line.count(sep) for sep in separators}
+            
+            # Retornar o separador com mais ocorrências
+            return max(separator_counts, key=separator_counts.get)
+            
+        except Exception:
+            return ';'  # Fallback para CAGED
+    
+    def _apply_schema(self, df: pl.DataFrame, schema: Dict[str, Any]) -> pl.DataFrame:
+        """
+        Aplica schema aos dados
+        
+        Args:
+            df: DataFrame original
+            schema: Schema a ser aplicado
+            
+        Returns:
+            DataFrame com schema aplicado
+        """
+        try:
+            # Converter tipos de dados conforme schema
+            for column, dtype in schema.items():
+                if column in df.columns:
+                    df = df.with_columns(pl.col(column).cast(dtype))
+            
+            return df
+            
+        except Exception as e:
+            logger.warning(f"Erro ao aplicar schema: {e}")
+            return df
+    
+    def _apply_validation_rules(self, df: pl.DataFrame, rules: Dict[str, Any]) -> pl.DataFrame:
+        """
+        Aplica regras de validação aos dados
+        
+        Args:
+            df: DataFrame original
+            rules: Regras de validação
+            
+        Returns:
+            DataFrame validado
+        """
+        try:
+            for column, rule in rules.items():
+                if column in df.columns:
+                    # Aplicar validação de range mínimo
+                    if 'min' in rule:
+                        df = df.filter(pl.col(column) >= rule['min'])
+                    
+                    # Aplicar validação de range máximo
+                    if 'max' in rule:
+                        df = df.filter(pl.col(column) <= rule['max'])
+            
+            return df
+            
+        except Exception as e:
+            logger.warning(f"Erro ao aplicar validações: {e}")
+            return df
+    
+    def batch_convert(self, 
+                     input_files: List[str], 
+                     output_dir: str,
+                     **kwargs) -> List[str]:
+        """
+        Converte múltiplos arquivos em lote
+        
+        Args:
+            input_files: Lista de arquivos de entrada
+            output_dir: Diretório de saída
+            **kwargs: Argumentos adicionais para convert_to_parquet
+            
+        Returns:
+            Lista de arquivos de saída criados
+        """
+        output_files = []
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+        
+        for input_file in input_files:
+            try:
+                input_path = Path(input_file)
+                output_file = output_path / f"{input_path.stem}.parquet"
+                
+                success = self.convert_to_parquet(
+                    input_file, 
+                    str(output_file),
+                    **kwargs
+                )
+                
+                if success:
+                    output_files.append(str(output_file))
+                    
+            except Exception as e:
+                logger.error(f"Erro na conversão em lote de {input_file}: {e}")
+                continue
+        
+        return output_files
+    
+    def get_supported_input_formats(self) -> List[str]:
+        """
+        Retorna lista de formatos de entrada suportados
+        
+        Returns:
+            Lista de extensões suportadas
+        """
+        return [".txt", ".csv"]
+    
+    def get_supported_output_formats(self) -> List[str]:
+        """
+        Retorna lista de formatos de saída suportados
+        
+        Returns:
+            List[str]: Lista de extensões suportadas
+        """
+        return [".parquet"]
+    
+    def validate_input_file(self, file_path: str) -> bool:
+        """
+        Valida se o arquivo de entrada é válido
+        
+        Args:
+            file_path: Caminho do arquivo
+            
+        Returns:
+            bool: True se válido
+            
+        Raises:
+            FileValidationError: Se arquivo inválido
+        """
+        path = Path(file_path)
+        
+        # Verificar se arquivo existe
+        if not path.exists():
+            raise FileValidationError(f"Arquivo não encontrado: {file_path}")
+        
+        # Verificar se é um arquivo (não diretório)
+        if not path.is_file():
+            raise FileValidationError(f"Caminho não é um arquivo: {file_path}")
+        
+        # Verificar se arquivo não está vazio
+        if path.stat().st_size == 0:
+            raise FileValidationError(f"Arquivo está vazio: {file_path}")
+        
+        # Verificar extensão
+        valid_extensions = [".txt", ".csv"]
+        if path.suffix.lower() not in valid_extensions:
+            raise FileValidationError(
+                f"Extensão inválida: {path.suffix}. "
+                f"Extensões suportadas: {valid_extensions}"
+            )
+        
+        return True
+    
+    def detect_delimiter(self, file_path: str) -> str:
+        """
+        Detecta o delimitador do arquivo
+        
+        Args:
+            file_path: Caminho do arquivo
+            
+        Returns:
+            str: Delimitador detectado
+        """
+        encoding = self._detect_encoding(file_path)
+        return self._detect_separator(file_path, encoding)
+    
+    def get_file_info(self, file_path: str) -> Dict[str, Any]:
+        """
+        Obtém informações detalhadas do arquivo
+        
+        Args:
+            file_path: Caminho do arquivo
+            
+        Returns:
+            Dict com informações do arquivo
+        """
+        if not self.validate_input_file(file_path):
+            raise FileValidationError(f"Arquivo inválido: {file_path}")
+        
+        file_size = Path(file_path).stat().st_size
+        encoding = self._detect_encoding(file_path)
+        delimiter = self._detect_separator(file_path, encoding)
+        
+        # Contar linhas
+        with open(file_path, 'r', encoding=encoding) as f:
+            line_count = sum(1 for _ in f)
+        
+        return {
+            "size_bytes": file_size,
+            "line_count": line_count,
+            "delimiter": delimiter,
+            "encoding": encoding,
+            "estimated_rows": max(0, line_count - 1)  # Subtrair cabeçalho
+        }
+    
+    def preview_data(self, file_path: str, rows: int = 5) -> 'pd.DataFrame':
+        """
+        Visualiza as primeiras linhas do arquivo
+        
+        Args:
+            file_path: Caminho do arquivo
+            rows: Número de linhas para preview
+            
+        Returns:
+            DataFrame com preview dos dados
+        """
+        import pandas as pd
+        
+        if not self.validate_input_file(file_path):
+            raise FileValidationError(f"Arquivo inválido: {file_path}")
+        
+        encoding = self._detect_encoding(file_path)
+        separator = self._detect_separator(file_path, encoding)
+        
+        try:
+            df = pl.read_csv(
+                file_path,
+                separator=separator,
+                encoding=encoding,
+                n_rows=rows
+            )
+            return df.to_pandas()
+        except Exception as e:
+            raise ConversionError(f"Erro ao fazer preview: {str(e)}")
+    
+    def validate_data_quality(self, file_path: str) -> Dict[str, List]:
+        """
+        Valida a qualidade dos dados no arquivo
+        
+        Args:
+            file_path: Caminho do arquivo
+            
+        Returns:
+            Dict com problemas encontrados
+        """
+        if not self.validate_input_file(file_path):
+            raise FileValidationError(f"Arquivo inválido: {file_path}")
+        
+        encoding = self._detect_encoding(file_path)
+        separator = self._detect_separator(file_path, encoding)
+        
+        issues = {
+            "missing_values": [],
+            "invalid_types": [],
+            "invalid_ranges": []
+        }
+        
+        try:
+            df = pl.read_csv(
+                file_path,
+                separator=separator,
+                encoding=encoding
+            )
+            
+            # Verificar valores ausentes
+            for col in df.columns:
+                null_count = df[col].null_count()
+                if null_count > 0:
+                    issues["missing_values"].append({
+                        "column": col,
+                        "null_count": null_count
+                    })
+            
+            # Verificar tipos inválidos para colunas numéricas esperadas
+            numeric_cols = ["ano", "mes", "admissoes", "desligamentos"]
+            for col in numeric_cols:
+                if col in df.columns:
+                    try:
+                        df[col].cast(pl.Int64)
+                    except:
+                        issues["invalid_types"].append({
+                            "column": col,
+                            "expected_type": "numeric"
+                        })
+            
+            # Verificar ranges inválidos
+            if "mes" in df.columns:
+                invalid_months = df.filter(
+                    (pl.col("mes") < 1) | (pl.col("mes") > 12)
+                ).height
+                if invalid_months > 0:
+                    issues["invalid_ranges"].append({
+                        "column": "mes",
+                        "issue": "valores fora do range 1-12",
+                        "count": invalid_months
+                    })
+            
+        except Exception as e:
+            logger.warning(f"Erro na validação de qualidade: {str(e)}")
+        
+        return issues
+    
+    def estimate_conversion_time(self, file_path: str) -> Dict[str, float]:
+        """
+        Estima o tempo de conversão baseado no tamanho do arquivo
+        
+        Args:
+            file_path: Caminho do arquivo
+            
+        Returns:
+            Dict com estimativas
+        """
+        if not self.validate_input_file(file_path):
+            raise FileValidationError(f"Arquivo inválido: {file_path}")
+        
+        file_size = Path(file_path).stat().st_size
+        file_size_mb = file_size / (1024 * 1024)
+        
+        # Estimativa baseada em benchmark: ~10MB/segundo
+        estimated_seconds = file_size_mb / 10
+        
+        # Estimar número de linhas baseado no tamanho
+        # Assumindo ~100 bytes por linha em média
+        estimated_rows = file_size / 100
+        
+        return {
+            "estimated_seconds": max(1.0, estimated_seconds),
+            "file_size_mb": file_size_mb,
+            "estimated_rows": int(estimated_rows)
+        }
+
+
 if __name__ == "__main__":
     # Configurar logging para execução direta
     import sys
