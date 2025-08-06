@@ -52,7 +52,6 @@ class MetricsCollector:
             "downloads": {"total": 0, "success": 0, "failed": 0, "total_duration": 0.0},
             "extractions": {"total": 0, "success": 0, "failed": 0, "total_duration": 0.0},
             "conversions": {"total": 0, "success": 0, "failed": 0, "total_duration": 0.0},
-            "cache_operations": {"hits": 0, "misses": 0, "saves": 0},
             "performance": {
                 "session_start": datetime.now().isoformat(),
                 "total_sessions": 0,
@@ -116,16 +115,7 @@ class MetricsCollector:
             
             logger.debug(f"Operação registrada: {operation} - {'sucesso' if success else 'falha'} - {duration:.2f}s")
     
-    def record_cache_operation(self, operation_type: str) -> None:
-        """Registra operação de cache.
-        
-        Args:
-            operation_type: Tipo de operação (hit, miss, save)
-        """
-        with self._lock:
-            if operation_type in self.metrics["cache_operations"]:
-                self.metrics["cache_operations"][operation_type] += 1
-                logger.debug(f"Cache {operation_type} registrado")
+
     
     def collect_resource_metrics(self) -> ResourceMetric:
         """Coleta métricas de recursos do sistema.
@@ -175,19 +165,7 @@ class MetricsCollector:
                 disk_free_gb=0.0
             )
     
-    def get_cache_hit_rate(self) -> float:
-        """Calcula a taxa de acerto do cache.
-        
-        Returns:
-            Taxa de acerto do cache (0.0 a 1.0)
-        """
-        cache_ops = self.metrics["cache_operations"]
-        total_requests = cache_ops["hits"] + cache_ops["misses"]
-        
-        if total_requests == 0:
-            return 0.0
-        
-        return cache_ops["hits"] / total_requests
+
     
     def get_success_rate(self, operation: str) -> float:
         """Calcula a taxa de sucesso de uma operação.

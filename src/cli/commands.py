@@ -24,7 +24,6 @@ from ..core.recovery import (
 )
 from ..utils.validators import CAGEDValidator
 from ..utils.logger import setup_logger
-from ..utils.utilitarios import limpar_cache as limpar_cache_func
 from ..utils.metrics import get_metrics_collector
 from dataclasses import asdict
 
@@ -100,15 +99,14 @@ def cli(ctx, config, profile, debug):
 @click.option('--campos', help='Campos específicos para conversão')
 @click.option('--dry-run', is_flag=True, help='Apenas validar, não executar')
 @click.option('--workers', type=int, help='Número de workers paralelos (calculado automaticamente se não informado)')
-@click.option('--use-cache', is_flag=True, help='Usar sistema de cache')
 @click.option('--resume', is_flag=True, help='Retomar operação interrompida')
-@click.option('--limpar-cache', is_flag=True, help='Limpar o cache antes de processar')
 @click.option('--sequential', is_flag=True, help='Executar processamento sequencial (sem paralelismo)')
 @click.option('--parallel-items', is_flag=True, help='Executar paralelismo entre itens em vez de entre estágios')
+@click.option('--limpar-arquivos', is_flag=True, help='Apagar arquivos após o processamento bem-sucedido')
 @click.pass_context
 def processar(ctx, ano, mes, ano_inicio, mes_inicio, ano_fim, mes_fim, todos_meses,
              download, extract, convert, skip_download, skip_extract, skip_convert,
-             campos, dry_run, workers, use_cache, resume, limpar_cache, sequential, parallel_items):
+             campos, dry_run, workers, resume, sequential, parallel_items, limpar_arquivos):
     """
     🔄 Comando Unificado de Processamento
     
@@ -147,12 +145,6 @@ def processar(ctx, ano, mes, ano_inicio, mes_inicio, ano_fim, mes_fim, todos_mes
     python main.py processar --ano 2024 --mes 1 --use-cache --workers 8
     """
     logger = ctx.obj['logger']
-
-    if limpar_cache:
-        logger.info("Opção --limpar-cache ativada. Limpando o cache...")
-        if not limpar_cache_func():
-            click.echo("Erro ao limpar o cache. Abortando.")
-            return
     
     try:
         # Carregar configuração
@@ -162,8 +154,7 @@ def processar(ctx, ano, mes, ano_inicio, mes_inicio, ano_fim, mes_fim, todos_mes
         # Sobrescrever configurações com parâmetros da linha de comando
         if workers:
             config.processing.max_workers = workers
-        if use_cache is not None:
-            config.cache.enabled = use_cache
+
         
         # Verificar se há operações que podem ser retomadas
         recovery_manager = RecoveryManager()
@@ -220,11 +211,10 @@ def processar(ctx, ano, mes, ano_inicio, mes_inicio, ano_fim, mes_fim, todos_mes
         # Determinar etapas de processamento
         stages = _determine_processing_stages(
             download, extract, convert,
-            skip_download, skip_extract, skip_convert
+            skip_download, skip_extract, skip_convert, limpar_arquivos
         )
         
-        # Definir variáveis para uso posterior
-        use_cache = config.cache.enabled if use_cache is None else use_cache
+
         
         click.echo("📋 Etapas planejadas:")
         for stage in ProcessingStage:
@@ -297,7 +287,6 @@ def processar(ctx, ano, mes, ano_inicio, mes_inicio, ano_fim, mes_fim, todos_mes
             'todos_meses': todos_meses,
             'stages': [s.value for s in stages],
             'total_items': len(items),
-            'use_cache': use_cache,
             'workers': workers
         }
         
@@ -698,7 +687,7 @@ def config_set(ctx, profile, section, key, value):
 
 
 def _determine_processing_stages(download, extract, convert,
-                               skip_download, skip_extract, skip_convert) -> List[ProcessingStage]:
+                               skip_download, skip_extract, skip_convert, limpar_arquivos) -> List[ProcessingStage]:
     """Determina quais estágios executar baseado nos flags"""
     stages = []
     
@@ -727,6 +716,9 @@ def _determine_processing_stages(download, extract, convert,
             stages.append(ProcessingStage.EXTRACT)
         if not skip_convert:
             stages.append(ProcessingStage.CONVERT)
+
+    if limpar_arquivos:
+        stages.append(ProcessingStage.CLEANUP)
     
     return stages
 

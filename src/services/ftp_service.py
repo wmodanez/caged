@@ -163,7 +163,7 @@ class FTPService:
         Cria e retorna uma nova conexão FTP autenticada.
         """
         try:
-            ftp = ftplib.FTP(self.config.host, timeout=self.config.timeout)
+            ftp = ftplib.FTP(self.config.host, timeout=self.config.timeout, encoding='latin-1')
             ftp.set_pasv(True)
             ftp.login(self.config.username, self.config.password)
             return ftp
@@ -244,16 +244,16 @@ class FTPService:
 
                 logger.info(f"📋 Encontrados {len(zip_files)} arquivos .7z para {ano}/{month_dir}")
 
-                # Criar estrutura de diretórios espelhando o FTP: files-zip/AAAA/AAAAMM/
-                year_month_dir = dest_path.parent / str(ano) / month_dir
-                year_month_dir.mkdir(parents=True, exist_ok=True)
+                # O diretório de destino já deve ser o caminho completo, incluindo ano e mês.
+                # Apenas garantimos que ele exista.
+                dest_path.mkdir(parents=True, exist_ok=True)
 
                 downloaded_files = []
                 total_size = 0
 
                 # Baixar todos os arquivos .7z
                 for file in zip_files:
-                    file_dest_path = year_month_dir / file
+                    file_dest_path = dest_path / file
                     try:
                         logger.info(f"📥 Baixando arquivo: {file}")
                         file_size = ftp.size(file)
@@ -317,6 +317,22 @@ class FTPService:
                 )
                 return False
     
+    @retry_on_ftp_error(max_retries=3, delay=1.0)
+    def list_remote_dirs(self, path: str) -> List[str]:
+        """
+        Lista diretórios em um caminho remoto.
+        """
+        with self._get_ftp_connection() as ftp:
+            try:
+                ftp.cwd(path)
+                # Usar nlst() que é mais compatível que mlsd()
+                items = ftp.nlst()
+                # Heurística: diretórios geralmente não têm '.' no nome
+                return [item for item in items if '.' not in item]
+            except ftplib.error_perm as e:
+                logger.warning(f"⚠️  Não foi possível listar diretórios em '{path}': {e}")
+                return []
+
     @retry_on_ftp_error(max_retries=2, delay=0.5)
     def list_available_files(self) -> List[str]:
         """

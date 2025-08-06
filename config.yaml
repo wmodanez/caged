@@ -26,11 +26,6 @@ profiles:
       max_workers: 2
       memory_limit_gb: 2.0
   default:
-    cache:
-      directory: cache
-      enabled: true
-      expiry_days: 30
-      max_size_gb: 10
     debug_mode: false
     ftp:
       directory: /pdet/microdados/NOVO CAGED

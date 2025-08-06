@@ -225,27 +225,7 @@ class TestParallelPipeline:
         
         assert pipeline.connection_pool is pool
     
-    @pytest.mark.asyncio
-    async def test_process_item_with_monitoring_cache_miss(self, pipeline, sample_items):
-        """Testa processamento de item com cache miss"""
-        item = sample_items[0]
-        semaphore = asyncio.Semaphore(1)
-        
-        # Mock do método _process_single_item
-        pipeline._process_single_item = AsyncMock(return_value=ProcessingResult(
-            item=item,
-            success=True,
-            duration=1.0,
-            files_processed=5,
-            bytes_processed=1024
-        ))
-        
-        result = await pipeline._process_item_with_monitoring(item, semaphore)
-        
-        assert result.success is True
-        assert result.duration > 0
-        assert pipeline._parallel_stats['cache_misses'] == 1
-        assert pipeline._parallel_stats['cache_hits'] == 0
+
     
     @pytest.mark.asyncio
     async def test_process_item_with_error(self, pipeline, sample_items):

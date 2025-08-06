@@ -101,24 +101,7 @@ class TestMetricsCollector:
             assert latest_metric.cpu_usage_percent == 25.0
             assert latest_metric.disk_free_gb == 100.0
     
-    def test_record_cache_metrics(self, metrics_collector):
-        """Testa registro de métricas de cache"""
-        cache_stats = {
-            "hits": 15,
-            "misses": 5,
-            "total_requests": 20,
-            "hit_rate": 0.75,
-            "cache_size_mb": 256.5
-        }
-        
-        metrics_collector.record_cache_metrics(cache_stats)
-        
-        assert "cache" in metrics_collector.metrics
-        cache_metrics = metrics_collector.metrics["cache"]
-        
-        assert cache_metrics["hits"] == 15
-        assert cache_metrics["misses"] == 5
-        assert cache_metrics["hit_rate"] == 0.75
+
     
     def test_get_operation_stats(self, metrics_collector):
         """Testa obtenção de estatísticas de operações"""

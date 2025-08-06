@@ -79,7 +79,8 @@ python main.py processar --ano 2024 --mes 1 --extract
 python main.py processar --ano 2024 --mes 1 --convert
 
 # Pular etapas específicas
-python main.py processar --ano 2024 --mes 1 --pular-download --pular-extracao
+python main.py processar --ano 2024 --mes 1 --skip-download --skip-extract --skip-convert
+
 ```
 
 ### ⚙️ Configuração do Sistema
@@ -106,7 +107,7 @@ python main.py --debug processar --ano 2024 --mes 1
 python main.py processar --ano 2024 --mes 1 --validacao-rigorosa
 
 # Forçar reprocessamento
-python main.py processar --ano 2024 --mes 1 --forcar
+python main.py processar --ano 2024 --mes 1 --force
 
 # Processamento com número de workers personalizado
 python main.py processar --ano 2024 --mes 1 --workers 12

@@ -26,15 +26,6 @@ class FTPConfig:
     password: Optional[str] = None
 
 
-@dataclass
-class CacheConfig:
-    """Configurações de Cache"""
-    enabled: bool = True
-    directory: str = "cache"
-    max_size_gb: int = 10
-    expiry_days: int = 30
-    cleanup_on_startup: bool = False
-
 
 @dataclass
 class ProcessingConfig:
@@ -73,7 +64,6 @@ class LoggingConfig:
 class CAGEDConfig:
     """Configuração principal do sistema CAGED"""
     ftp: FTPConfig = field(default_factory=FTPConfig)
-    cache: CacheConfig = field(default_factory=CacheConfig)
     processing: ProcessingConfig = field(default_factory=ProcessingConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
@@ -151,8 +141,6 @@ class ConfigManager:
             f"{self.ENV_PREFIX}FTP_SERVER": ("ftp", "server"),
             f"{self.ENV_PREFIX}FTP_DIRECTORY": ("ftp", "directory"),
             f"{self.ENV_PREFIX}FTP_TIMEOUT": ("ftp", "timeout"),
-            f"{self.ENV_PREFIX}CACHE_ENABLED": ("cache", "enabled"),
-            f"{self.ENV_PREFIX}CACHE_DIRECTORY": ("cache", "directory"),
             f"{self.ENV_PREFIX}MAX_WORKERS": ("processing", "max_workers"),
             f"{self.ENV_PREFIX}OUTPUT_FORMAT": ("output", "format"),
             f"{self.ENV_PREFIX}LOG_LEVEL": ("logging", "level"),
@@ -231,10 +219,6 @@ class ConfigManager:
         if config.processing.memory_limit_gb <= 0:
             raise ConfigurationError("Limite de memória deve ser positivo")
         
-        # Validar cache
-        if config.cache.max_size_gb <= 0:
-            raise ConfigurationError("Tamanho máximo do cache deve ser positivo")
-        
         # Validar output
         if config.output.format not in ['parquet', 'csv', 'json']:
             raise ConfigurationError(f"Formato de saída inválido: {config.output.format}")
@@ -269,12 +253,6 @@ class ConfigManager:
                 'directory': config.ftp.directory,
                 'timeout': config.ftp.timeout,
                 'max_retries': config.ftp.max_retries,
-            },
-            'cache': {
-                'enabled': config.cache.enabled,
-                'directory': config.cache.directory,
-                'max_size_gb': config.cache.max_size_gb,
-                'expiry_days': config.cache.expiry_days,
             },
             'processing': {
                 'max_workers': config.processing.max_workers,

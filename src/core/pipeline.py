@@ -21,7 +21,6 @@ from contextlib import asynccontextmanager
 from .config import CAGEDConfig, get_config
 from .exceptions import PipelineError, ValidationError
 from ..utils.logger import setup_logger
-from ..utils.cache import cache_manager
 from ..utils.metrics import get_metrics_collector, record_operation
 
 

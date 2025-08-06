@@ -21,8 +21,7 @@ from datetime import datetime, timedelta
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 # Importações do projeto
-from src.core.config import CAGEDConfig, ProcessingConfig, FTPConfig, CacheConfig
-from src.utils.cache import CacheManager
+from src.core.config import CAGEDConfig, ProcessingConfig, FTPConfig
 from src.core.recovery import RecoveryManager
 from src.utils.metrics import MetricsCollector
 
@@ -44,12 +43,7 @@ def test_config():
         retry_attempts=1,
         chunk_size=100
     )
-    config.cache = CacheConfig(
-        enabled=True,
-        directory="test_cache",
-        max_size_gb=1,
-        expiry_days=1
-    )
+
     return config
 
 
@@ -60,11 +54,7 @@ def temp_dir():
         yield Path(temp_dir)
 
 
-@pytest.fixture
-def temp_cache_dir():
-    """Diretório temporário para cache de testes."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        yield Path(temp_dir)
+
 
 
 @pytest.fixture
@@ -97,10 +87,7 @@ def sample_7z_file(temp_dir):
     return file_path
 
 
-@pytest.fixture
-def cache_manager(temp_cache_dir):
-    """Cache manager para testes."""
-    return CacheManager(cache_dir=temp_cache_dir)
+
 
 
 @pytest.fixture

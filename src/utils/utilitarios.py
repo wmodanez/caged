@@ -15,21 +15,7 @@ from pathlib import Path
 logger = logging.getLogger("caged")
 
 
-def limpar_cache(cache_dir: str = "cache"):
-    """Remove o diretório de cache para forçar o reprocessamento."""
-    cache_path = Path(cache_dir)
-    
-    if cache_path.exists() and cache_path.is_dir():
-        try:
-            shutil.rmtree(cache_path)
-            logger.info(f"Diretório de cache '{cache_path}' removido com sucesso.")
-            return True
-        except Exception as e:
-            logger.error(f"Erro ao remover o diretório de cache '{cache_path}': {e}")
-            return False
-    else:
-        logger.warning(f"Diretório de cache '{cache_path}' não encontrado.")
-        return True
+
 
 
 def formatar_tempo(segundos: float) -> str:

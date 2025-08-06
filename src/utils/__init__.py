@@ -5,7 +5,7 @@ Implementação do Item 1.4 do Plano de Melhorias
 
 Este módulo contém:
 - Configuração de logs
-- Sistema de cache
+
 - Métricas e monitoramento
 - Validadores
 - Utilitários gerais
