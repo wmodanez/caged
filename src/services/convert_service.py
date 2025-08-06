@@ -293,7 +293,7 @@ class ConversorParquetCaged:
     
     def __init__(self, 
                  diretorio_origem: str = "files-unzip",
-                 diretorio_destino: str = "parquet",
+                 diretorio_destino: str = "files-parquet",
                  max_workers: Optional[int] = None,
                  chunk_size: Optional[int] = None,
                  habilitar_paralelismo: bool = True,
