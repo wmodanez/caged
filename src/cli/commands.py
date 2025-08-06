@@ -99,14 +99,16 @@ def cli(ctx, config, profile, debug):
 @click.option('--skip-convert', is_flag=True, help='Pular etapa de conversão')
 @click.option('--campos', help='Campos específicos para conversão')
 @click.option('--dry-run', is_flag=True, help='Apenas validar, não executar')
-@click.option('--workers', type=int, help='Número de workers paralelos')
+@click.option('--workers', type=int, help='Número de workers paralelos (calculado automaticamente se não informado)')
 @click.option('--use-cache', is_flag=True, help='Usar sistema de cache')
 @click.option('--resume', is_flag=True, help='Retomar operação interrompida')
 @click.option('--limpar-cache', is_flag=True, help='Limpar o cache antes de processar')
+@click.option('--sequential', is_flag=True, help='Executar processamento sequencial (sem paralelismo)')
+@click.option('--parallel-items', is_flag=True, help='Executar paralelismo entre itens em vez de entre estágios')
 @click.pass_context
 def processar(ctx, ano, mes, ano_inicio, mes_inicio, ano_fim, mes_fim, todos_meses,
              download, extract, convert, skip_download, skip_extract, skip_convert,
-             campos, dry_run, workers, use_cache, resume, limpar_cache):
+             campos, dry_run, workers, use_cache, resume, limpar_cache, sequential, parallel_items):
     """
     🔄 Comando Unificado de Processamento
     
@@ -391,20 +393,30 @@ def processar(ctx, ano, mes, ano_inicio, mes_inicio, ano_fim, mes_fim, todos_mes
             # Executar processamento
             import asyncio
             
-            # Determinar se usar processamento paralelo
-            use_parallel = (
-                config.processing.enable_parallel and 
-                len(items) > 1 and 
-                workers and workers > 1
-            )
+            # Calcular número de workers automaticamente se não informado
+            import multiprocessing
+            if not workers:
+                # Usar 75% dos cores disponíveis, no mínimo 2
+                available_cores = multiprocessing.cpu_count()
+                workers = max(2, int(available_cores * 0.75))
+                logger.info(f"Número de workers calculado automaticamente: {workers}")
             
-            if use_parallel:
+            # Configurar workers no config
+            config.processing.max_workers = workers
+            
+            # Determinar modo de processamento
+            if sequential:
+                # Modo sequencial explicitamente solicitado
+                click.echo("🔄 Usando processamento sequencial (solicitado pelo usuário)")
+                results = asyncio.run(pipeline.process_items(items, parallel=False))
+            elif parallel_items and len(items) > 1:
+                # Paralelismo entre itens solicitado
                 from src.core.pipeline import create_parallel_pipeline
                 parallel_pipeline = create_parallel_pipeline(config)
                 parallel_pipeline.set_progress_callback(progress_callback)
                 parallel_pipeline.set_error_callback(error_callback)
                 
-                click.echo(f"⚡ Usando processamento paralelo ({workers} workers)")
+                click.echo(f"⚡ Usando processamento paralelo entre itens ({workers} workers)")
                 results = asyncio.run(
                     parallel_pipeline.process_items_parallel(
                         items, 
@@ -412,8 +424,16 @@ def processar(ctx, ano, mes, ano_inicio, mes_inicio, ano_fim, mes_fim, todos_mes
                     )
                 )
             else:
-                click.echo("🔄 Usando processamento sequencial")
-                results = asyncio.run(pipeline.process_items(items, parallel=False))
+                # Modo padrão: paralelismo entre estágios
+                from src.core.stage_parallel_pipeline import create_stage_parallel_pipeline
+                stage_parallel_pipeline = create_stage_parallel_pipeline(config)
+                stage_parallel_pipeline.set_progress_callback(progress_callback)
+                stage_parallel_pipeline.set_error_callback(error_callback)
+                
+                click.echo(f"⚡ Usando processamento com estágios paralelos ({workers} workers)")
+                results = asyncio.run(
+                    stage_parallel_pipeline.process_items_with_parallel_stages(items)
+                )
             
             # Fechar barra de progresso
             if progress_bar:
@@ -909,16 +929,27 @@ def _estimate_processing_time(items, stages, config) -> str:
     
     total_estimated_seconds = 0
     
+    # Calcular tempo base para cada item e estágio
     for item in items:
+        item_time = 0
         for stage in item.stages:
             base_time = base_times.get(stage, 20)  # 20s padrão
-            total_estimated_seconds += base_time
+            item_time += base_time
+        total_estimated_seconds += item_time
     
-    # Ajustar para processamento paralelo
+    # Ajustar para o modo de processamento
+    workers = config.processing.max_workers
+    
+    # Paralelismo entre estágios (padrão)
+    # Reduz o tempo total pois os estágios são executados em paralelo
+    # A redução é menor que no paralelismo entre itens, mas ainda significativa
+    # Estimativa: redução de 30% no tempo total
+    total_estimated_seconds *= 0.7
+    
+    # Ajuste adicional para paralelismo entre itens (se aplicável)
     if config.processing.enable_parallel and len(items) > 1:
-        workers = config.processing.max_workers
         parallel_factor = min(workers, len(items)) / len(items)
-        total_estimated_seconds *= (1 - parallel_factor * 0.7)  # 70% de eficiência paralela
+        total_estimated_seconds *= (1 - parallel_factor * 0.5)  # 50% de eficiência adicional
     
     return _format_duration(total_estimated_seconds)
 

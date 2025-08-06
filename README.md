@@ -26,18 +26,18 @@ Sistema automatizado para download, processamento e consolidação de dados mens
 - **📁 Estrutura de Diretórios Hierárquica**: Os arquivos baixados são organizados em `files-zip/AAAA/AAAAMM/` espelhando a estrutura do servidor FTP
 - **🔄 Atualização do FTP Service**: Adaptado para navegar corretamente na estrutura do Novo CAGED (`/pdet/microdados/NOVO CAGED`)
 - **📋 CLI Simplificada**: Interface mais intuitiva com comportamento padrão inteligente
-
-### 🔧 Melhorias Técnicas
-
+- **⚡ Paralelismo Entre Estágios**: O processamento paralelo entre estágios (download, extração, conversão) é o comportamento padrão, permitindo que a extração comece assim que o primeiro download termina, sem esperar todos os downloads
 - **Validação Aprimorada**: Lógica de validação de parâmetros mais flexível e intuitiva
 - **Organização de Arquivos**: Estrutura de pastas que facilita a localização e gerenciamento dos dados
 - **Compatibilidade Mantida**: Todos os comandos existentes continuam funcionando normalmente
+- **⚡ Paralelismo Automático**: O sistema calcula automaticamente o número ideal de workers (75% dos cores disponíveis) quando não especificado
+- **🔄 Pipeline Otimizado**: Paralelismo entre estágios como padrão, permitindo que a extração comece assim que o primeiro download termina, sem esperar todos os downloads
 
 ## 📋 Requisitos
 
 - Python 3.8+
-- Espaço em disco: ~2GB por ano de dados
-- Memória RAM: 4GB recomendado
+- Espaço em disco: ~20GB por ano de dados
+- Memória RAM: 16GB recomendado
 
 ## ⚙️ Instalação
 
@@ -108,8 +108,14 @@ python main.py processar --ano 2024 --mes 1 --validacao-rigorosa
 # Forçar reprocessamento
 python main.py processar --ano 2024 --mes 1 --forcar
 
-# Processamento paralelo customizado
-python main.py processar --ano 2024 --mes 1 --workers 8
+# Processamento com número de workers personalizado
+python main.py processar --ano 2024 --mes 1 --workers 12
+
+# Processamento sequencial (sem paralelismo)
+python main.py processar --ano 2024 --mes 1 --sequential
+
+# Processamento paralelo entre itens (em vez do padrão entre estágios)
+python main.py processar --ano 2024 --mes 1 --parallel-items
 
 # Usar sistema de cache
 python main.py processar --ano 2024 --mes 1 --use-cache
@@ -167,6 +173,27 @@ python examples/exemplo_metricas.py
 ```
 
 ## 🏗️ Arquitetura
+
+### ⚡ Modos de Processamento
+
+O sistema oferece três modos de processamento:
+
+1. **🔄 Processamento Sequencial** (com `--sequential`)
+   - Executa todas as etapas em sequência
+   - Primeiro todos os downloads, depois todas as extrações, por fim todas as conversões
+   - Útil para ambientes com recursos limitados
+
+2. **⚡ Paralelismo Entre Estágios** (padrão)
+   - Executa os estágios em paralelo para cada item
+   - A extração de um item começa assim que seu download termina
+   - A conversão de um item começa assim que sua extração termina
+   - Otimiza o uso de recursos e reduz o tempo total de processamento
+   - Número de workers calculado automaticamente (75% dos cores disponíveis)
+
+3. **🔄 Paralelismo Entre Itens** (com `--parallel-items`)
+   - Processa múltiplos itens simultaneamente
+   - Todos os downloads são executados em paralelo, depois todas as extrações, etc.
+   - Útil quando há muitos itens pequenos
 
 ### 🎯 Benefícios da Arquitetura
 
@@ -261,7 +288,21 @@ O sistema implementa um cache avançado para otimizar o processamento de dados:
 
 ## ⚡ Sistema de Processamento Paralelo
 
-O sistema implementa processamento paralelo avançado para otimizar performance:
+O sistema implementa dois tipos de processamento paralelo para otimizar performance:
+
+### 🎯 Processamento Paralelo entre Itens
+Processa múltiplos itens (meses/anos) em paralelo:
+```bash
+python main.py processar --ano 2024 --mes 1 --workers 8
+```
+
+### 🚀 Processamento Paralelo entre Estágios
+Executa estágios (download, extração, conversão) em paralelo para cada item:
+```bash
+python main.py processar --ano 2024 --mes 1 --parallel-stages --workers 8
+```
+
+Com este modo, assim que um download é concluído, a extração começa imediatamente, sem esperar que todos os downloads terminem.
 
 ### 🎯 Funcionalidades do Processamento Paralelo
 
@@ -271,6 +312,15 @@ O sistema implementa processamento paralelo avançado para otimizar performance:
 - **Ajuste Automático**: Número de workers baseado na carga do sistema
 - **Sistema de Throttling**: Prevenção de sobrecarga do sistema
 - **Estatísticas Detalhadas**: Métricas de performance e uso de recursos
+- **Pipeline com Estágios Paralelos**: Download, extração e conversão executados em pipeline
+
+### 📊 Comparação de Modos de Processamento
+
+| Modo | Descrição | Caso de Uso |
+|------|-----------|-------------|
+| **Sequencial** | Executa tudo em sequência | Recursos limitados |
+| **Paralelo entre Itens** | Múltiplos itens em paralelo | Muitos períodos diferentes |
+| **Paralelo entre Estágios** | Estágios em pipeline | Otimizar tempo total por item |
 
 ### 📈 Benefícios de Performance
 

@@ -28,11 +28,8 @@ class DownloadStageHandler(PipelineStageHandler):
         self.ftp_config = config.ftp
         # Inicializar serviço FTP real
         ftp_config = FTPConfig.from_config({
-            'host': self.ftp_config.server,
-            'port': 21,
-            'username': 'anonymous',
-            'password': 'anonymous@example.com',
-            'base_path': self.ftp_config.directory,
+            'server': self.ftp_config.server,
+            'directory': self.ftp_config.directory,
             'timeout': self.ftp_config.timeout,
             'max_retries': self.ftp_config.max_retries
         })
