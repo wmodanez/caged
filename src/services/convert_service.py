@@ -36,6 +36,7 @@ from src.entities.indicador import Indicador
 from src.utils.utilitarios import (
     MedidorTempo,
     padronizar_colunas_dataframe,
+    padronizar_nome_coluna_caged,
     aplicar_padronizacao_colunas,
     validar_campos_caged,
     criar_mapeamento_caged_flexivel,
@@ -611,24 +612,28 @@ class ConversorParquetCaged:
         
         return chunk_size_inicial
     
-    def _criar_mapeamento_dinamico(self, colunas: List[str]) -> Dict[str, str]:
+    def _criar_mapeamento_dinamico(self, colunas: List[str], usar_versao_melhorada: bool = True) -> Dict[str, str]:
         """
         Cria mapeamento dinâmico de colunas baseado nos padrões CAGED
         
         Args:
             colunas: Lista de nomes de colunas originais
+            usar_versao_melhorada: Se True, usa a versão melhorada da padronização
             
         Returns:
             Dicionário de mapeamento {coluna_original: coluna_padronizada}
         """
-        from src.utils.utilitarios import padronizar_nome_coluna
+        from src.utils.utilitarios import padronizar_nome_coluna, padronizar_nome_coluna_caged
         
         mapeamento = {}
         colunas_padronizadas = set()
         
         for coluna_original in colunas:
             # Padronizar nome básico
-            coluna_limpa = padronizar_nome_coluna(coluna_original)
+            if usar_versao_melhorada:
+                coluna_limpa = padronizar_nome_coluna_caged(coluna_original)
+            else:
+                coluna_limpa = padronizar_nome_coluna(coluna_original)
             
             # Verificar se corresponde a algum campo essencial
             campo_mapeado = None
@@ -2707,13 +2712,15 @@ class ConversorParquetCaged:
             logger.error(f"Erro na recuperação automática: {e}")
             return ';'
     
-    def _padronizar_colunas(self, df: pl.DataFrame, arquivo_origem: Optional[Path] = None) -> pl.DataFrame:
+    def _padronizar_colunas(self, df: pl.DataFrame, arquivo_origem: Optional[Path] = None, usar_versao_melhorada: bool = True) -> pl.DataFrame:
         """
         Padroniza nomes das colunas usando sistema dinâmico flexível
         
         Args:
             df: DataFrame original
             arquivo_origem: Arquivo de origem (para cache)
+            usar_versao_melhorada: Se True, usa a versão melhorada da padronização que remove
+                                  preposições e adiciona underscores em campos específicos
             
         Returns:
             DataFrame com colunas padronizadas
@@ -2727,7 +2734,13 @@ class ConversorParquetCaged:
                 logger.debug(f"Usando mapeamento em cache para {arquivo_origem.name}")
             else:
                 # Criar mapeamento dinâmico baseado nos padrões CAGED
-                mapeamento = self._criar_mapeamento_dinamico(df.columns)
+                if usar_versao_melhorada:
+                    # Usar a versão melhorada da padronização
+                    mapeamento = {}
+                    for coluna in df.columns:
+                        mapeamento[coluna] = padronizar_nome_coluna_caged(coluna)
+                else:
+                    mapeamento = self._criar_mapeamento_dinamico(df.columns, usar_versao_melhorada=usar_versao_melhorada)
                 
                 # Validar colunas usando sistema flexível
                 colunas_invalidas = obter_colunas_invalidas(df.columns)
@@ -2752,7 +2765,7 @@ class ConversorParquetCaged:
             except Exception as e:
                 logger.error(f"Erro na padronização de colunas: {e}")
                 # Fallback para padronização básica
-                mapeamento_basico = padronizar_colunas_dataframe(df.columns)
+                mapeamento_basico = padronizar_colunas_dataframe(df.columns, usar_versao_melhorada=usar_versao_melhorada)
                 return df.rename(mapeamento_basico)
     
     def _aplicar_tipos_dados(self, df: pl.DataFrame) -> pl.DataFrame:
@@ -4681,6 +4694,10 @@ class ConvertService:
                 if progress_callback:
                     progress_callback(80)  # 80% - dados processados
                 
+                # Padronizar nomes das colunas
+                mapeamento_colunas = padronizar_colunas_dataframe(df.columns, usar_versao_melhorada=True)
+                df = df.rename(mapeamento_colunas)
+
                 # Salvar como Parquet
                 df.write_parquet(output_path, compression=compression)
                 

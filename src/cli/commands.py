@@ -24,6 +24,7 @@ from ..core.recovery import (
 )
 from ..utils.validators import CAGEDValidator
 from ..utils.logger import setup_logger
+from ..utils.utilitarios import limpar_cache as limpar_cache_func
 from ..utils.metrics import get_metrics_collector
 from dataclasses import asdict
 
@@ -101,10 +102,11 @@ def cli(ctx, config, profile, debug):
 @click.option('--workers', type=int, help='Número de workers paralelos')
 @click.option('--use-cache', is_flag=True, help='Usar sistema de cache')
 @click.option('--resume', is_flag=True, help='Retomar operação interrompida')
+@click.option('--limpar-cache', is_flag=True, help='Limpar o cache antes de processar')
 @click.pass_context
 def processar(ctx, ano, mes, ano_inicio, mes_inicio, ano_fim, mes_fim, todos_meses,
              download, extract, convert, skip_download, skip_extract, skip_convert,
-             campos, dry_run, workers, use_cache, resume):
+             campos, dry_run, workers, use_cache, resume, limpar_cache):
     """
     🔄 Comando Unificado de Processamento
     
@@ -143,6 +145,12 @@ def processar(ctx, ano, mes, ano_inicio, mes_inicio, ano_fim, mes_fim, todos_mes
     python main.py processar --ano 2024 --mes 1 --use-cache --workers 8
     """
     logger = ctx.obj['logger']
+
+    if limpar_cache:
+        logger.info("Opção --limpar-cache ativada. Limpando o cache...")
+        if not limpar_cache_func():
+            click.echo("Erro ao limpar o cache. Abortando.")
+            return
     
     try:
         # Carregar configuração

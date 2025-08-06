@@ -30,7 +30,7 @@ from src.cli.commands import cli
 
 if __name__ == '__main__':
     # Criar diretórios necessários se não existirem
-    for dir_name in ['files-zip', 'files-unzip', 'parquet', 'logs', 'cache', 'config']:
+    for dir_name in ['files-zip', 'files-unzip', 'files-parquet', 'parquet', 'logs', 'cache', 'config']:
         Path(dir_name).mkdir(exist_ok=True)
     
     # Executar CLI

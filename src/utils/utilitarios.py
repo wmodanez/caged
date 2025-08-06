@@ -8,9 +8,28 @@ from contextlib import contextmanager
 # Importação do sistema de logging centralizado
 from src.utils.logger import LoggerConfig, setup_logger, log_structured
 import logging
+import shutil
+from pathlib import Path
 
 # Usar o logger centralizado configurado no main.py
 logger = logging.getLogger("caged")
+
+
+def limpar_cache(cache_dir: str = "cache"):
+    """Remove o diretório de cache para forçar o reprocessamento."""
+    cache_path = Path(cache_dir)
+    
+    if cache_path.exists() and cache_path.is_dir():
+        try:
+            shutil.rmtree(cache_path)
+            logger.info(f"Diretório de cache '{cache_path}' removido com sucesso.")
+            return True
+        except Exception as e:
+            logger.error(f"Erro ao remover o diretório de cache '{cache_path}': {e}")
+            return False
+    else:
+        logger.warning(f"Diretório de cache '{cache_path}' não encontrado.")
+        return True
 
 
 def formatar_tempo(segundos: float) -> str:
@@ -238,38 +257,79 @@ def padronizar_nome_coluna(nome_coluna: str) -> str:
     return nome
 
 
-def padronizar_colunas_dataframe(df_colunas: List[str]) -> Dict[str, str]:
+def padronizar_nome_coluna_caged(nome_coluna: str) -> str:
+    """
+    Padroniza nomes de colunas do CAGED, incluindo casos especiais e melhorias de legibilidade.
+    """
+    nome_padronizado = padronizar_nome_coluna(nome_coluna)
+    palavras_para_remover = ['DE', 'DO', 'DA', 'DOS', 'DAS', 'E', 'EM', 'COM', 'PARA', 'POR']
+    palavras = nome_padronizado.split('_')
+    palavras_filtradas = [p for p in palavras if p not in palavras_para_remover]
+    nome_final = '_'.join(palavras_filtradas)
+    # Casos especiais
+    if 'GRAUINSTRUCAO' in nome_final or 'GRAUDEINSTRUCAO' in nome_final:
+        nome_final = 'GRAU_INSTRUCAO'
+    if 'SALDOMOVIMENTACAO' in nome_final:
+        nome_final = 'SALDO_MOVIMENTACAO'
+    if 'COMPETENCIAMOV' in nome_final:
+        nome_final = 'COMPETENCIA_MOV'
+    if 'CBO2002OCUPACAO' in nome_final:
+        nome_final = 'CBO2002_OCUPACAO'
+    if 'TIPODEDEFICIENCIA' in nome_final or 'TIPODEFICIENCIA' in nome_final or 'TIPO_DEFICIENCIA' in nome_final:
+        nome_final = 'TIPO_DEFICIENCIA'
+    if 'HORASCONTRATUAIS' in nome_final:
+        nome_final = 'HORAS_CONTRATUAIS'
+    if 'RACACOR' in nome_final:
+        nome_final = 'RACA_COR'
+    if 'TIPOEMPREGADOR' in nome_final:
+        nome_final = 'TIPO_EMPREGADOR'
+    if 'TIPOESTABELECIMENTO' in nome_final:
+        nome_final = 'TIPO_ESTABELECIMENTO'
+    if 'TIPOMOVIMENTACAO' in nome_final:
+        nome_final = 'TIPO_MOVIMENTACAO'
+    if 'INDTRABINTERMITENTE' in nome_final:
+        nome_final = 'IND_TRAB_INTERMITENTE'
+    if 'INDTRABPARCIAL' in nome_final:
+        nome_final = 'IND_TRAB_PARCIAL'
+    if 'TAMESTABJAN' in nome_final:
+        nome_final = 'TAM_ESTAB_JAN'
+    if 'INDICADORAPRENDIZ' in nome_final:
+        nome_final = 'IND_APRENDIZ'
+    if 'ORIGEMDAINFORMACAO' in nome_final:
+        nome_final = 'ORIGEM_INFORMACAO'
+    if 'COMPETENCIAEXC' in nome_final:
+        nome_final = 'COMPETENCIA_EXC'
+    if 'INDICADORDEEXCLUSAO' in nome_final:
+        nome_final = 'INDICADOR_EXCLUSAO'
+    if 'COMPETENCIADEC' in nome_final:
+        nome_final = 'COMPETENCIA_DEC'
+    if 'INDICADORDEFORADOPRAZO' in nome_final:
+        nome_final = 'INDICADOR_FORA_PRAZO'
+    if 'UNIDADESALARIOCODIGO' in nome_final:
+        nome_final = 'UNIDADE_SALARIO_CODIGO'
+    if 'VALORSALARIOFIXO' in nome_final:
+        nome_final = 'VALOR_SALARIO_FIXO'
+    logger.debug(f"Coluna padronizada (CAGED): '{nome_coluna}' -> '{nome_final}'")
+    return nome_final
+
+
+def padronizar_colunas_dataframe(df_colunas: List[str], usar_versao_melhorada: bool = False) -> Dict[str, str]:
     """
     Padroniza uma lista de nomes de colunas e retorna um mapeamento
     entre os nomes originais e os padronizados.
     Especialmente útil para arquivos CAGED com variações de nomenclatura.
-    
-    Args:
-        df_colunas: Lista com os nomes originais das colunas
-        
-    Returns:
-        Dicionário com mapeamento {nome_original: nome_padronizado}
-        
-    Exemplo:
-        >>> colunas = ["Código do Município", "Saldo Movimentação"]
-        >>> mapeamento = padronizar_colunas_dataframe(colunas)
-        >>> print(mapeamento)
-        {'Código do Município': 'CODIGO_DO_MUNICIPIO', 'Saldo Movimentação': 'SALDO_MOVIMENTACAO'}
     """
     mapeamento = {}
-    
     for coluna in df_colunas:
-        nome_padronizado = padronizar_nome_coluna(coluna)
+        if usar_versao_melhorada:
+            nome_padronizado = padronizar_nome_coluna_caged(coluna)
+        else:
+            nome_padronizado = padronizar_nome_coluna(coluna)
         mapeamento[coluna] = nome_padronizado
-    
-    # Verificar se há colunas duplicadas após padronização
     nomes_padronizados = list(mapeamento.values())
     duplicados = set([nome for nome in nomes_padronizados if nomes_padronizados.count(nome) > 1])
-    
     if duplicados:
         logger.warning(f"Colunas duplicadas após padronização: {duplicados}")
-        
-        # Adicionar sufixo numérico para colunas duplicadas
         contadores = {}
         for coluna_original, nome_padronizado in mapeamento.items():
             if nome_padronizado in duplicados:
@@ -277,7 +337,6 @@ def padronizar_colunas_dataframe(df_colunas: List[str]) -> Dict[str, str]:
                 if contadores[nome_padronizado] > 1:
                     mapeamento[coluna_original] = f"{nome_padronizado}_{contadores[nome_padronizado]}"
                     logger.info(f"Coluna renomeada para evitar duplicação: '{coluna_original}' -> '{mapeamento[coluna_original]}'")
-    
     logger.info(f"Padronização concluída: {len(mapeamento)} colunas processadas")
     return mapeamento
 
