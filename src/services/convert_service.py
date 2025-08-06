@@ -4894,20 +4894,20 @@ class ConvertService:
         
         # Verificar se arquivo existe
         if not path.exists():
-            raise FileValidationError(f"Arquivo não encontrado: {file_path}")
+            raise ValueError(f"Arquivo não encontrado: {file_path}")
         
         # Verificar se é um arquivo (não diretório)
         if not path.is_file():
-            raise FileValidationError(f"Caminho não é um arquivo: {file_path}")
+            raise ValueError(f"Path is not a file: {file_path}")
         
         # Verificar se arquivo não está vazio
         if path.stat().st_size == 0:
-            raise FileValidationError(f"Arquivo está vazio: {file_path}")
+            raise ValueError(f"Arquivo está vazio: {file_path}")
         
         # Verificar extensão
         valid_extensions = [".txt", ".csv"]
         if path.suffix.lower() not in valid_extensions:
-            raise FileValidationError(
+            raise ValueError(
                 f"Extensão inválida: {path.suffix}. "
                 f"Extensões suportadas: {valid_extensions}"
             )
@@ -4938,7 +4938,7 @@ class ConvertService:
             Dict com informações do arquivo
         """
         if not self.validate_input_file(file_path):
-            raise FileValidationError(f"Arquivo inválido: {file_path}")
+            raise ValueError(f"Invalid file: {file_path}")
         
         file_size = Path(file_path).stat().st_size
         encoding = self._detect_encoding(file_path)
@@ -4956,7 +4956,7 @@ class ConvertService:
             "estimated_rows": max(0, line_count - 1)  # Subtrair cabeçalho
         }
     
-    def preview_data(self, file_path: str, rows: int = 5) -> 'pd.DataFrame':
+    def preview_data(self, file_path: str, rows: int = 5) -> 'pl.DataFrame':
         """
         Visualiza as primeiras linhas do arquivo
         
@@ -4967,10 +4967,9 @@ class ConvertService:
         Returns:
             DataFrame com preview dos dados
         """
-        import pandas as pd
         
         if not self.validate_input_file(file_path):
-            raise FileValidationError(f"Arquivo inválido: {file_path}")
+            raise ValueError(f"Arquivo inválido: {file_path}")
         
         encoding = self._detect_encoding(file_path)
         separator = self._detect_separator(file_path, encoding)
@@ -4982,9 +4981,9 @@ class ConvertService:
                 encoding=encoding,
                 n_rows=rows
             )
-            return df.to_pandas()
+            return df
         except Exception as e:
-            raise ConversionError(f"Erro ao fazer preview: {str(e)}")
+            raise Exception(f"Error during preview: {str(e)}")
     
     def validate_data_quality(self, file_path: str) -> Dict[str, List]:
         """
@@ -4997,7 +4996,7 @@ class ConvertService:
             Dict com problemas encontrados
         """
         if not self.validate_input_file(file_path):
-            raise FileValidationError(f"Arquivo inválido: {file_path}")
+            raise ValueError(f"Arquivo inválido: {file_path}")
         
         encoding = self._detect_encoding(file_path)
         separator = self._detect_separator(file_path, encoding)
@@ -5064,7 +5063,7 @@ class ConvertService:
             Dict com estimativas
         """
         if not self.validate_input_file(file_path):
-            raise FileValidationError(f"Arquivo inválido: {file_path}")
+            raise ValueError(f"Arquivo inválido: {file_path}")
         
         file_size = Path(file_path).stat().st_size
         file_size_mb = file_size / (1024 * 1024)
