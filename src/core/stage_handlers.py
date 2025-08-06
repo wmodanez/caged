@@ -132,6 +132,15 @@ class ExtractStageHandler(PipelineStageHandler):
     
     def __init__(self, config: CAGEDConfig, logger: logging.Logger):
         super().__init__(config, logger)
+        # Inicializar ExtractService
+        from ..services.extract_service import DescompactadorCaged
+        self.extract_service = DescompactadorCaged(
+            diretorio_origem="files-zip",
+            diretorio_destino="files-unzip", 
+            max_workers=config.processing.max_workers,
+            usar_emojis=config.logging.use_emojis,
+            nivel_log=config.logging.level
+        )
     
     async def process(self, item: ProcessingItem) -> ProcessingResult:
         """Processa extração de arquivos"""
@@ -145,47 +154,67 @@ class ExtractStageHandler(PipelineStageHandler):
             
             if cache_manager.has_cached_item(cache_key):
                 self.logger.info(f"💾 Usando arquivos extraídos em cache para {item.id}")
+                cached_data = cache_manager.get_cached_item(cache_key)
                 duration = time.time() - start_time
                 
                 return ProcessingResult(
                     item=item,
                     success=True,
                     duration=duration,
-                    files_processed=3,  # Simular múltiplos arquivos
-                    bytes_processed=0,
+                    files_processed=len(cached_data.get("files", [])),
+                    bytes_processed=cached_data.get("total_size", 0),
                     warnings=["Arquivos obtidos do cache"]
                 )
             
-            # Simular extração
-            await asyncio.sleep(0.3)  # Simular tempo de extração
-            
-            # Simular arquivos extraídos
-            extracted_files = [
-                f"CAGEDMOV{item.ano}{item.mes:02d}.txt",
-                f"CAGEDFOR{item.ano}{item.mes:02d}.txt",
-                f"CAGEDEXC{item.ano}{item.mes:02d}.txt"
-            ]
-            
-            total_size = 150 * 1024 * 1024  # 150MB simulado
-            
-            # Cachear resultado
-            cache_manager.cache_item(
-                cache_key,
-                {"files": extracted_files, "total_size": total_size},
-                category="extractions"
+            # Executar extração real usando ExtractService
+            success, metadados_lista = self.extract_service.descompactar_mensal(
+                ano=item.ano,
+                mes=item.mes,
+                usar_paralelo=self.config.processing.enable_parallel,
+                max_workers=self.config.processing.max_workers
             )
             
-            duration = time.time() - start_time
-            
-            self.logger.info(f"✅ Extração concluída para {item.id}: {len(extracted_files)} arquivos")
-            
-            return ProcessingResult(
-                item=item,
-                success=True,
-                duration=duration,
-                files_processed=len(extracted_files),
-                bytes_processed=total_size
-            )
+            if success and metadados_lista:
+                # Coletar informações dos arquivos extraídos
+                extracted_files = []
+                total_size = 0
+                
+                for metadados in metadados_lista:
+                    if "arquivos_extraidos" in metadados:
+                        extracted_files.extend(metadados["arquivos_extraidos"])
+                    if "tamanho_total_descompactado" in metadados:
+                        total_size += metadados["tamanho_total_descompactado"]
+                
+                # Cachear resultado
+                cache_manager.cache_item(
+                    cache_key,
+                    {"files": extracted_files, "total_size": total_size, "metadados": metadados_lista},
+                    category="extractions"
+                )
+                
+                duration = time.time() - start_time
+                
+                self.logger.info(f"✅ Extração concluída para {item.id}: {len(extracted_files)} arquivos")
+                
+                return ProcessingResult(
+                    item=item,
+                    success=True,
+                    duration=duration,
+                    files_processed=len(extracted_files),
+                    bytes_processed=total_size
+                )
+            else:
+                # Falha na extração
+                duration = time.time() - start_time
+                error_msg = f"Falha na extração para {item.id}: nenhum arquivo foi extraído"
+                self.logger.error(error_msg)
+                
+                return ProcessingResult(
+                    item=item,
+                    success=False,
+                    duration=duration,
+                    errors=[error_msg]
+                )
             
         except Exception as e:
             duration = time.time() - start_time
@@ -201,9 +230,11 @@ class ExtractStageHandler(PipelineStageHandler):
     
     def validate_item(self, item: ProcessingItem) -> bool:
         """Valida se o item pode ser extraído"""
-        # Verificar se download foi feito (ou está em cache)
-        download_cache_key = f"download_{item.ano}_{item.mes:02d}"
-        return cache_manager.has_cached_item(download_cache_key)
+        # Verificar se arquivo físico existe para extração
+        from pathlib import Path
+        filename = f"CAGEDMOV{item.ano}{item.mes:02d}.7z"
+        file_path = Path(f"files-zip/{item.ano}/{item.ano}{item.mes:02d}/{filename}")
+        return file_path.exists()
 
 
 class ConvertStageHandler(PipelineStageHandler):

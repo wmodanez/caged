@@ -332,9 +332,36 @@ class CacheManager:
     
     def get_cached_item(self, key: str) -> Optional[Any]:
         """Recupera item do cache (para objetos Python)."""
-        # Para esta implementação, retornamos None pois focamos em arquivos
-        # Em uma implementação completa, poderíamos usar pickle ou json
-        return None
+        if key not in self.metadata:
+            return None
+        
+        metadata = self.metadata[key]
+        
+        if not metadata.is_valid():
+            # Remover entrada inválida
+            del self.metadata[key]
+            self._save_metadata()
+            return None
+        
+        # Verificar se é um arquivo pickle
+        if not metadata.file_path.name.endswith('.pkl'):
+            return None
+        
+        try:
+            import pickle
+            with open(metadata.file_path, 'rb') as f:
+                item = pickle.load(f)
+            
+            # Atualizar estatísticas de acesso
+            metadata.update_access()
+            self._save_metadata()
+            
+            logger.debug(f"Cache item hit: {key}")
+            return item
+            
+        except Exception as e:
+            logger.error(f"Erro ao recuperar item do cache {key}: {e}")
+            return None
     
     def cache_item(self, key: str, item: Any, category: str = "default") -> bool:
         """Cacheia item Python (implementação básica)."""

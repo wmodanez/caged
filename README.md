@@ -60,20 +60,20 @@ pip install -r requirements.txt
 
 ### 🔄 Comando Principal de Processamento
 ```bash
-# Processamento completo (download + extração + conversão)
-python main.py processar --ano 2024 --mes 1
-
 # Processamento anual completo (todos os meses do ano)
 python main.py processar --ano 2024
+
+# Processamento completo (download + extração + conversão)
+python main.py processar --ano 2024 --mes 1
 
 # Processamento por faixa de datas
 python main.py processar --ano-inicio 2024 --mes-inicio 1 --ano-fim 2024 --mes-fim 6
 
 # Apenas download
-python main.py processar --ano 2024 --mes 1 --apenas-download
+python main.py processar --ano 2024 --mes 1 --download
 
 # Apenas extração
-python main.py processar --ano 2024 --mes 1 --apenas-extracao
+python main.py processar --ano 2024 --mes 1 --extract
 
 # Apenas conversão
 python main.py processar --ano 2024 --mes 1 --apenas-conversao
