@@ -261,6 +261,19 @@ def processar(ctx, ano, mes, ano_inicio, mes_inicio, ano_fim, mes_fim,
             logger.warning("Nenhum item de processamento criado. Verifique a disponibilidade dos dados.")
             return
         
+        # Verificar se é processamento multi-anual e configurar consolidação
+        if ProcessingStage.CONSOLIDATE in stages and len(anos_unicos) > 1:
+            # Configurar contexto multi-anual no handler de consolidação
+            from src.core.stage_handlers import create_stage_handlers
+            stage_handlers = create_stage_handlers(config)
+            consolidate_handler = stage_handlers.get(ProcessingStage.CONSOLIDATE)
+            if consolidate_handler:
+                consolidate_handler.set_multi_year_context(anos_unicos)
+                logger.info(f"🔗 Configurada consolidação multi-anual para período {min(anos_unicos)}-{max(anos_unicos)}")
+            
+            # Atualizar pipeline com handlers configurados
+            pipeline._stage_handlers = stage_handlers
+        
         # Executar validações centralizadas
         _execute_validations(items, stages, config, logger)
         

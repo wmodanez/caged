@@ -66,46 +66,33 @@ class StageParallelPipeline(CAGEDPipeline):
         Esta função implementa um pipeline onde cada estágio é executado em paralelo,
         e assim que um estágio é concluído para um item, o próximo estágio é iniciado
         imediatamente para esse item.
+        
+        Para consolidação multi-anual, a consolidação é executada apenas uma vez
+        no final, após todos os outros estágios serem concluídos.
         """
         self.logger.info(f"🚀 Iniciando pipeline com estágios paralelos para {len(items)} itens")
         self._stats["start_time"] = datetime.now()
         pipeline_start_time = time.time()
         
+        # Verificar se há consolidação multi-anual
+        consolidate_handler = self._stage_handlers.get(ProcessingStage.CONSOLIDATE)
+        has_multi_year_consolidation = (
+            consolidate_handler and 
+            hasattr(consolidate_handler, 'multi_year_context') and 
+            consolidate_handler.multi_year_context is not None
+        )
+        
         # Resultados finais
         results = []
         
         try:
-            # Criar workers para cada estágio
-            workers = []
-            for stage in ProcessingStage:
-                if stage in self._stage_handlers:
-                    for _ in range(self.max_workers):
-                        worker = asyncio.create_task(
-                            self._stage_worker(stage, self._stage_queues[stage])
-                        )
-                        workers.append(worker)
-            
-            # Criar task para monitorar conclusão
-            completion_queue = asyncio.Queue()
-            completion_monitor = asyncio.create_task(
-                self._completion_monitor(completion_queue, len(items))
-            )
-            
-            # Colocar itens na fila do primeiro estágio
-            for item in items:
-                # Determinar primeiro estágio para o item
-                first_stage = self._get_first_stage(item)
-                if first_stage:
-                    # Criar cópia do item com informações de rastreamento
-                    tracked_item = self._create_tracked_item(item, completion_queue)
-                    await self._stage_queues[first_stage].put(tracked_item)
-            
-            # Aguardar conclusão de todos os itens
-            results = await completion_monitor
-            
-            # Cancelar workers
-            for worker in workers:
-                worker.cancel()
+            if has_multi_year_consolidation:
+                # Modo especial: processar todos os estágios exceto consolidação primeiro
+                self.logger.info("🔗 Detectada consolidação multi-anual - processando em modo especial")
+                results = await self._process_with_delayed_consolidation(items)
+            else:
+                # Modo normal: processar todos os estágios em paralelo
+                results = await self._process_normal_parallel(items)
             
             # Registrar métricas
             pipeline_duration = time.time() - pipeline_start_time
@@ -154,20 +141,241 @@ class StageParallelPipeline(CAGEDPipeline):
                 return stage
         return None
     
-    def _get_next_stage(self, item: ProcessingItem, current_stage: ProcessingStage) -> Optional[ProcessingStage]:
+    def _get_next_stage(self, item: ProcessingItem, current_stage: ProcessingStage, skip_consolidate: bool = False) -> Optional[ProcessingStage]:
         """
         Determina o próximo estágio para o item
+        
+        Args:
+            item: Item de processamento
+            current_stage: Estágio atual
+            skip_consolidate: Se True, pula o estágio de consolidação
         """
         stages = list(ProcessingStage)
         try:
             current_index = stages.index(current_stage)
             for i in range(current_index + 1, len(stages)):
                 next_stage = stages[i]
+                if skip_consolidate and next_stage == ProcessingStage.CONSOLIDATE:
+                    continue
                 if next_stage in self._stage_handlers and next_stage in item.stages:
                     return next_stage
         except ValueError:
             pass
         return None
+    
+    async def _process_normal_parallel(self, items: List[ProcessingItem]) -> List[ProcessingResult]:
+        """
+        Processamento normal com todos os estágios em paralelo
+        """
+        # Criar workers para cada estágio
+        workers = []
+        for stage in ProcessingStage:
+            if stage in self._stage_handlers:
+                for _ in range(self.max_workers):
+                    worker = asyncio.create_task(
+                        self._stage_worker(stage, self._stage_queues[stage])
+                    )
+                    workers.append(worker)
+        
+        # Criar task para monitorar conclusão
+        completion_queue = asyncio.Queue()
+        completion_monitor = asyncio.create_task(
+            self._completion_monitor(completion_queue, len(items))
+        )
+        
+        # Colocar itens na fila do primeiro estágio
+        for item in items:
+            # Determinar primeiro estágio para o item
+            first_stage = self._get_first_stage(item)
+            if first_stage:
+                # Criar cópia do item com informações de rastreamento
+                tracked_item = self._create_tracked_item(item, completion_queue)
+                await self._stage_queues[first_stage].put(tracked_item)
+        
+        # Aguardar conclusão de todos os itens
+        results = await completion_monitor
+        
+        # Cancelar workers
+        for worker in workers:
+            worker.cancel()
+        
+        return results
+    
+    async def _process_with_delayed_consolidation(self, items: List[ProcessingItem]) -> List[ProcessingResult]:
+        """
+        Processamento especial para consolidação multi-anual:
+        1. Processa todos os estágios exceto consolidação em paralelo
+        2. Executa consolidação uma única vez no final
+        """
+        # Filtrar itens que têm consolidação
+        items_with_consolidation = [item for item in items if ProcessingStage.CONSOLIDATE in item.stages]
+        
+        if not items_with_consolidation:
+            # Se nenhum item tem consolidação, usar processamento normal
+            return await self._process_normal_parallel(items)
+        
+        # Fase 1: Processar todos os estágios exceto consolidação
+        self.logger.info("📦 Fase 1: Processando estágios de download, extração e conversão")
+        
+        # Criar workers para todos os estágios exceto consolidação
+        workers = []
+        for stage in ProcessingStage:
+            if stage in self._stage_handlers and stage != ProcessingStage.CONSOLIDATE:
+                for _ in range(self.max_workers):
+                    worker = asyncio.create_task(
+                        self._stage_worker_skip_consolidate(stage, self._stage_queues[stage])
+                    )
+                    workers.append(worker)
+        
+        # Criar task para monitorar conclusão da fase 1
+        phase1_completion_queue = asyncio.Queue()
+        phase1_monitor = asyncio.create_task(
+            self._completion_monitor(phase1_completion_queue, len(items))
+        )
+        
+        # Colocar itens na fila do primeiro estágio
+        for item in items:
+            first_stage = self._get_first_stage(item)
+            if first_stage and first_stage != ProcessingStage.CONSOLIDATE:
+                tracked_item = self._create_tracked_item(item, phase1_completion_queue)
+                await self._stage_queues[first_stage].put(tracked_item)
+        
+        # Aguardar conclusão da fase 1
+        phase1_results = await phase1_monitor
+        
+        # Cancelar workers da fase 1
+        for worker in workers:
+            worker.cancel()
+        
+        # Verificar se houve falhas na fase 1
+        phase1_failures = [r for r in phase1_results if not r.success]
+        if phase1_failures:
+            self.logger.warning(f"⚠️ {len(phase1_failures)} itens falharam na fase 1, pulando consolidação multi-anual")
+            return phase1_results
+        
+        # Fase 2: Executar consolidação multi-anual uma única vez
+        self.logger.info("🔗 Fase 2: Executando consolidação multi-anual")
+        
+        consolidate_handler = self._stage_handlers[ProcessingStage.CONSOLIDATE]
+        
+        # Usar o último item para executar a consolidação multi-anual
+        last_item = items_with_consolidation[-1]
+        
+        try:
+            consolidation_start_time = time.time()
+            consolidation_result = await consolidate_handler.process(last_item)
+            consolidation_duration = time.time() - consolidation_start_time
+            
+            if consolidation_result.success:
+                self.logger.info(f"✅ Consolidação multi-anual concluída em {consolidation_duration:.2f}s")
+                # Marcar todos os itens com consolidação como tendo consolidação bem-sucedida
+                for result in phase1_results:
+                    if ProcessingStage.CONSOLIDATE in result.item.stages:
+                        # Adicionar resultado de consolidação fictício para estatísticas
+                        result.warnings.extend(consolidation_result.warnings)
+            else:
+                self.logger.error("❌ Falha na consolidação multi-anual")
+                # Marcar itens com consolidação como falhados
+                for result in phase1_results:
+                    if ProcessingStage.CONSOLIDATE in result.item.stages:
+                        result.success = False
+                        result.errors.extend(consolidation_result.errors)
+                        self._stats["failure_count"] += 1
+                        self._stats["success_count"] -= 1
+        
+        except Exception as e:
+            self.logger.error(f"❌ Erro na consolidação multi-anual: {e}")
+            # Marcar itens com consolidação como falhados
+            for result in phase1_results:
+                if ProcessingStage.CONSOLIDATE in result.item.stages:
+                    result.success = False
+                    result.errors.append(f"Erro na consolidação multi-anual: {e}")
+                    self._stats["failure_count"] += 1
+                    self._stats["success_count"] -= 1
+        
+        return phase1_results
+    
+    async def _stage_worker_skip_consolidate(self, stage: ProcessingStage, queue: asyncio.Queue):
+        """
+        Worker para processar itens de um estágio específico, pulando consolidação
+        """
+        handler = self._stage_handlers[stage]
+        
+        while True:
+            try:
+                # Obter próximo item da fila
+                tracked_item = await queue.get()
+                item = tracked_item["item"]
+                completion_queue = tracked_item["completion_queue"]
+                
+                # Atualizar informações de rastreamento
+                tracked_item["current_stage"] = stage
+                
+                try:
+                    # Processar estágio
+                    self.logger.info(f"🔄 Processando estágio {stage.value} para item {item.id}")
+                    stage_start_time = time.time()
+                    
+                    # Callback de progresso
+                    if self._progress_callback:
+                        stage_index = list(ProcessingStage).index(stage)
+                        progress = stage_index / len(ProcessingStage)
+                        self._progress_callback(item, stage, progress)
+                    
+                    # Executar handler do estágio
+                    result = await handler.process(item)
+                    
+                    # Registrar resultado do estágio
+                    tracked_item["stage_results"][stage] = result
+                    
+                    # Verificar se o estágio foi bem-sucedido
+                    if not result.success:
+                        # Registrar erro
+                        if result.errors:
+                            tracked_item["errors"].extend(result.errors)
+                        else:
+                            tracked_item["errors"].append(f"Falha no estágio {stage.value} sem mensagem de erro específica")
+                        
+                        # Item com erro, enviar para fila de conclusão
+                        await completion_queue.put(self._create_error_result(tracked_item, Exception(f"Falha no estágio {stage.value}")))
+                    else:
+                        # Determinar próximo estágio (pulando consolidação)
+                        next_stage = self._get_next_stage(item, stage, skip_consolidate=True)
+                        tracked_item["next_stage"] = next_stage
+                        
+                        if next_stage:
+                            # Enviar para próximo estágio apenas se não houver erros
+                            if not tracked_item["errors"]:
+                                await self._stage_queues[next_stage].put(tracked_item)
+                            else:
+                                # Se houver erros, enviar para fila de conclusão
+                                await completion_queue.put(self._create_error_result(tracked_item, Exception(f"Falha anterior ao estágio {next_stage.value}")))
+                        else:
+                            # Item concluído (sem consolidação), enviar para fila de conclusão
+                            await completion_queue.put(self._create_final_result(tracked_item))
+                    
+                    # Atualizar estatísticas
+                    self._stats["stages_completed"] += 1
+                    
+                except Exception as e:
+                    self.logger.error(f"❌ Erro no estágio {stage.value} para item {item.id}: {e}")
+                    tracked_item["errors"].append(str(e))
+                    
+                    # Item com erro, enviar para fila de conclusão
+                    await completion_queue.put(self._create_error_result(tracked_item, e))
+                    
+                    # Callback de erro
+                    if self._error_callback:
+                        self._error_callback(item, e)
+                
+                finally:
+                    # Marcar tarefa como concluída
+                    queue.task_done()
+                    
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                self.logger.error(f"❌ Erro não tratado no worker do estágio {stage.value}: {e}")
     
     async def _stage_worker(self, stage: ProcessingStage, queue: asyncio.Queue):
         """
@@ -213,8 +421,8 @@ class StageParallelPipeline(CAGEDPipeline):
                         # Item com erro, enviar para fila de conclusão
                         await completion_queue.put(self._create_error_result(tracked_item, Exception(f"Falha no estágio {stage.value}")))
                     else:
-                        # Determinar próximo estágio
-                        next_stage = self._get_next_stage(item, stage)
+                        # Determinar próximo estágio (sem pular consolidação no modo normal)
+                        next_stage = self._get_next_stage(item, stage, skip_consolidate=False)
                         tracked_item["next_stage"] = next_stage
                         
                         if next_stage:

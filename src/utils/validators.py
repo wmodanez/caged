@@ -350,6 +350,38 @@ class SystemValidator:
 
 class CAGEDValidator:
     @staticmethod
+    def _get_available_months_from_ftp(year: int) -> List[int]:
+        """
+        Consulta os meses disponíveis no FTP para um ano específico.
+        
+        Args:
+            year: Ano para consultar
+            
+        Returns:
+            Lista de meses disponíveis (1-12)
+        """
+        try:
+            from ..core.config import get_config
+            from ..services.ftp_service import FTPService
+            
+            config = get_config()
+            ftp_service = FTPService(config)
+            available_months = ftp_service.list_remote_directories(year)
+            
+            if not available_months:
+                # Se não encontrar meses no FTP, usar todos os meses como fallback
+                return list(range(1, 13))
+                
+            return sorted(available_months)
+            
+        except Exception as e:
+            # Em caso de erro, usar todos os meses como fallback
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Erro ao consultar meses disponíveis no FTP para {year}: {e}")
+            return list(range(1, 13))
+    
+    @staticmethod
     def validar_e_obter_meses(
         ano: Optional[int] = None,
         mes: Optional[int] = None,
@@ -367,12 +399,15 @@ class CAGEDValidator:
         Returns:
             Lista de tuplas (ano, mes).
         """
-        # Modo 1: Ano específico (processa todos os meses automaticamente)
+        # Modo 1: Ano específico (processa todos os meses disponíveis no FTP)
         if ano and not mes and not any([ano_inicio, mes_inicio, ano_fim, mes_fim]):
             valido, msg = DateValidator.validate_year_month(ano)
             if not valido:
                 raise ValidationError(msg)
-            return [(ano, m) for m in range(1, 13)]
+            
+            # Consultar meses disponíveis no FTP
+            available_months = CAGEDValidator._get_available_months_from_ftp(ano)
+            return [(ano, m) for m in available_months]
 
         # Modo 2: Mês específico
         if ano and mes:
@@ -384,7 +419,28 @@ class CAGEDValidator:
                 raise ValidationError(msg)
             return [(ano, mes)]
 
-        # Modo 3: Faixa de datas
+        # Modo 3: Faixa de anos (sem meses especificados - usa meses disponíveis no FTP)
+        if ano_inicio and ano_fim and not mes_inicio and not mes_fim:
+            # Validar anos
+            valido, msg = DateValidator.validate_year_month(ano_inicio)
+            if not valido:
+                raise ValidationError(f"Ano inicial inválido: {msg}")
+            valido, msg = DateValidator.validate_year_month(ano_fim)
+            if not valido:
+                raise ValidationError(f"Ano final inválido: {msg}")
+            
+            if ano_inicio > ano_fim:
+                raise ValidationError("Ano inicial deve ser menor ou igual ao ano final")
+            
+            # Processar meses disponíveis para cada ano
+            meses = []
+            for a in range(ano_inicio, ano_fim + 1):
+                available_months = CAGEDValidator._get_available_months_from_ftp(a)
+                for m in available_months:
+                    meses.append((a, m))
+            return meses
+
+        # Modo 4: Faixa de datas completa
         if ano_inicio and mes_inicio and ano_fim and mes_fim:
             valido, msg = DateValidator.validate_date_range(ano_inicio, mes_inicio, ano_fim, mes_fim)
             if not valido:
@@ -398,7 +454,23 @@ class CAGEDValidator:
                     meses.append((a, m))
             return meses
 
-
+        # Modo 5: Faixa de datas com meses padrão
+        if ano_inicio and ano_fim and (mes_inicio or mes_fim):
+            # Se apenas um dos meses foi especificado, usar padrões
+            mes_inicio_final = mes_inicio if mes_inicio else 1
+            mes_fim_final = mes_fim if mes_fim else 12
+            
+            valido, msg = DateValidator.validate_date_range(ano_inicio, mes_inicio_final, ano_fim, mes_fim_final)
+            if not valido:
+                raise ValidationError(msg)
+            
+            meses = []
+            for a in range(ano_inicio, ano_fim + 1):
+                start_mes = mes_inicio_final if a == ano_inicio else 1
+                end_mes = mes_fim_final if a == ano_fim else 12
+                for m in range(start_mes, end_mes + 1):
+                    meses.append((a, m))
+            return meses
 
         raise ValidationError("Combinação de parâmetros inválida. Use --help para ver as opções.")
     """

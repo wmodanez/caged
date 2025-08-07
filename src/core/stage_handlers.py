@@ -567,129 +567,36 @@ class CleanupStageHandler(PipelineStageHandler):
 
 
 class ConsolidateStageHandler(PipelineStageHandler):
-    """Handler para estágio de consolidação anual"""
+    """Handler para estágio de consolidação anual e multi-anual"""
     
     def __init__(self, config: CAGEDConfig, logger: logging.Logger):
         super().__init__(config, logger)
         self.output_config = config.output
+        self._multi_year_context = None  # Para armazenar contexto de consolidação multi-anual
+    
+    def set_multi_year_context(self, anos: List[int]):
+        """Define o contexto para consolidação multi-anual"""
+        if len(anos) > 1:
+            self._multi_year_context = {
+                'anos': sorted(anos),
+                'ano_inicio': min(anos),
+                'ano_fim': max(anos),
+                'is_multi_year': True
+            }
+        else:
+            self._multi_year_context = None
     
     async def process(self, item: ProcessingItem) -> ProcessingResult:
-        """Processa consolidação de arquivos anuais"""
+        """Processa consolidação de arquivos anuais ou multi-anuais"""
         start_time = time.time()
         
         try:
-            self.logger.info(f"📊 Iniciando consolidação anual para {item.ano}")
-            
-            # Validar se existem arquivos para consolidar
-            if not self.validate_item(item):
-                self.logger.warning(f"⚠️  Nenhum arquivo CAGEDMOV encontrado para consolidação do ano {item.ano}")
-                return ProcessingResult(
-                    item=item,
-                    success=True,
-                    duration=time.time() - start_time,
-                    warnings=[f"Nenhum arquivo CAGEDMOV encontrado para consolidação do ano {item.ano}"]
-                )
-            
-            # Encontrar todos os arquivos parquet do ano que contêm CAGEDMOV
-            import polars as pl
-            
-            year_dir = Path(f"files-parquet/{item.ano}")
-            cagedmov_files = []
-            
-            # Buscar arquivos CAGEDMOV em todos os meses do ano
-            for month in range(1, 13):
-                month_dir = year_dir / f"{item.ano}{month:02d}"
-                if month_dir.exists():
-                    # Filtrar apenas arquivos que contêm 'CAGEDMOV' no nome
-                    month_files = [f for f in month_dir.glob("*.parquet") if "CAGEDMOV" in f.name]
-                    cagedmov_files.extend(month_files)
-            
-            if not cagedmov_files:
-                raise PipelineError(f"Nenhum arquivo parquet CAGEDMOV encontrado para o ano {item.ano}")
-            
-            self.logger.info(f"Encontrados {len(cagedmov_files)} arquivos CAGEDMOV para consolidação")
-            
-            # Preparar diretório de saída (files-parquet/ANO/)
-            output_dir = Path(f"files-parquet/{item.ano}")
-            output_dir.mkdir(parents=True, exist_ok=True)
-            
-            # Nome do arquivo consolidado
-            consolidated_file = output_dir / f"CAGEDMOV{item.ano}.parquet"
-            
-            # Ler e consolidar todos os arquivos CAGEDMOV
-            dataframes = []
-            total_input_size = 0
-            
-            for file_path in cagedmov_files:
-                self.logger.debug(f"Lendo arquivo CAGEDMOV: {file_path}")
-                df = pl.read_parquet(file_path)
-                dataframes.append(df)
-                total_input_size += file_path.stat().st_size
-            
-            # Concatenar todos os DataFrames
-            self.logger.info("Consolidando dados CAGEDMOV...")
-            consolidated_df = pl.concat(dataframes)
-            
-            # Ordenar por data de movimentação se a coluna existir
-            date_columns = ['data_movimentacao', 'competencia_mov', 'data']
-            sort_column = None
-            for col in date_columns:
-                if col in consolidated_df.columns:
-                    sort_column = col
-                    break
-            
-            if sort_column:
-                self.logger.info(f"Ordenando dados por {sort_column}")
-                consolidated_df = consolidated_df.sort(sort_column)
-            
-            # Salvar arquivo consolidado
-            self.logger.info(f"Salvando arquivo consolidado: {consolidated_file}")
-            consolidated_df.write_parquet(
-                consolidated_file,
-                compression=self.output_config.compression
-            )
-            
-            # Verificar arquivo criado
-            if not consolidated_file.exists():
-                raise PipelineError("Falha ao criar arquivo consolidado")
-            
-            output_size = consolidated_file.stat().st_size
-            total_records = len(consolidated_df)
-            
-            # Remover arquivos CAGEDMOV originais após consolidação bem-sucedida
-            self.logger.info("Removendo arquivos CAGEDMOV originais...")
-            removed_files = []
-            freed_space = 0
-            
-            for file_path in cagedmov_files:
-                try:
-                    file_size = file_path.stat().st_size
-                    file_path.unlink()
-                    removed_files.append(str(file_path))
-                    freed_space += file_size
-                    self.logger.debug(f"Arquivo removido: {file_path}")
-                except Exception as e:
-                    self.logger.warning(f"Erro ao remover arquivo {file_path}: {e}")
-            
-            # Remover diretórios vazios após remoção dos arquivos
-            self._remove_empty_month_dirs(year_dir)
-            
-            duration = time.time() - start_time
-            
-            self.logger.info(
-                f"✅ Consolidação concluída para {item.ano}: "
-                f"{total_records:,} registros CAGEDMOV consolidados em {consolidated_file.name}. "
-                f"{len(removed_files)} arquivos originais removidos, liberando {freed_space / (1024*1024):.2f} MB"
-            )
-            
-            return ProcessingResult(
-                item=item,
-                success=True,
-                duration=duration,
-                files_processed=len(cagedmov_files),
-                bytes_processed=output_size
-            )
-            
+            # Verificar se é consolidação multi-anual
+            if self._multi_year_context and self._multi_year_context['is_multi_year']:
+                return await self._process_multi_year_consolidation(item, start_time)
+            else:
+                return await self._process_single_year_consolidation(item, start_time)
+                
         except Exception as e:
             duration = time.time() - start_time
             error_msg = f"Erro na consolidação: {e}"
@@ -701,6 +608,253 @@ class ConsolidateStageHandler(PipelineStageHandler):
                 duration=duration,
                 errors=[error_msg]
             )
+    
+    async def _process_multi_year_consolidation(self, item: ProcessingItem, start_time: float) -> ProcessingResult:
+        """Processa consolidação multi-anual em arquivo único na raiz"""
+        context = self._multi_year_context
+        anos = context['anos']
+        ano_inicio = context['ano_inicio']
+        ano_fim = context['ano_fim']
+        
+        # Só processar uma vez (no último item para garantir que todos os dados estejam disponíveis)
+        if item.ano != ano_fim:
+            self.logger.info(f"⏭️ Pulando consolidação para {item.ano} - será processado na consolidação multi-anual final")
+            return ProcessingResult(
+                item=item,
+                success=True,
+                duration=time.time() - start_time,
+                warnings=[f"Consolidação multi-anual será feita no final do processamento"]
+            )
+        
+        self.logger.info(f"📊 Iniciando consolidação multi-anual para período {ano_inicio}-{ano_fim}")
+        
+        import polars as pl
+        
+        # Coletar todos os arquivos CAGEDMOV de todos os anos
+        all_cagedmov_files = []
+        total_input_size = 0
+        
+        for ano in anos:
+            year_dir = Path(f"files-parquet/{ano}")
+            if not year_dir.exists():
+                self.logger.warning(f"Diretório do ano {ano} não encontrado: {year_dir}")
+                continue
+                
+            # Buscar arquivos CAGEDMOV em todos os meses do ano
+            year_files = []
+            for month in range(1, 13):
+                month_dir = year_dir / f"{ano}{month:02d}"
+                if month_dir.exists():
+                    month_files = [f for f in month_dir.glob("*.parquet") if "CAGEDMOV" in f.name]
+                    year_files.extend(month_files)
+            
+            if year_files:
+                all_cagedmov_files.extend(year_files)
+                self.logger.info(f"Encontrados {len(year_files)} arquivos CAGEDMOV para o ano {ano}")
+            else:
+                self.logger.warning(f"Nenhum arquivo CAGEDMOV encontrado para o ano {ano}")
+        
+        if not all_cagedmov_files:
+            raise PipelineError(f"Nenhum arquivo parquet CAGEDMOV encontrado para o período {ano_inicio}-{ano_fim}")
+        
+        self.logger.info(f"Total de {len(all_cagedmov_files)} arquivos CAGEDMOV encontrados para consolidação multi-anual")
+        
+        # Preparar diretório de saída (raiz do files-parquet)
+        output_dir = Path("files-parquet")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Nome do arquivo consolidado multi-anual
+        consolidated_file = output_dir / f"CAGEDMOV{ano_inicio}-{ano_fim}.parquet"
+        
+        # Ler e consolidar todos os arquivos CAGEDMOV
+        dataframes = []
+        
+        for file_path in all_cagedmov_files:
+            self.logger.debug(f"Lendo arquivo CAGEDMOV: {file_path}")
+            df = pl.read_parquet(file_path)
+            dataframes.append(df)
+            total_input_size += file_path.stat().st_size
+        
+        # Concatenar todos os DataFrames
+        self.logger.info("Consolidando dados CAGEDMOV multi-anuais...")
+        consolidated_df = pl.concat(dataframes)
+        
+        # Ordenar por data de movimentação se a coluna existir
+        date_columns = ['data_movimentacao', 'competencia_mov', 'data']
+        sort_column = None
+        for col in date_columns:
+            if col in consolidated_df.columns:
+                sort_column = col
+                break
+        
+        if sort_column:
+            self.logger.info(f"Ordenando dados por {sort_column}")
+            consolidated_df = consolidated_df.sort(sort_column)
+        
+        # Salvar arquivo consolidado
+        self.logger.info(f"Salvando arquivo consolidado multi-anual: {consolidated_file}")
+        consolidated_df.write_parquet(
+            consolidated_file,
+            compression=self.output_config.compression
+        )
+        
+        # Verificar arquivo criado
+        if not consolidated_file.exists():
+            raise PipelineError("Falha ao criar arquivo consolidado multi-anual")
+        
+        output_size = consolidated_file.stat().st_size
+        total_records = len(consolidated_df)
+        
+        # Remover arquivos CAGEDMOV originais após consolidação bem-sucedida
+        self.logger.info("Removendo arquivos CAGEDMOV originais...")
+        removed_files = []
+        freed_space = 0
+        
+        for file_path in all_cagedmov_files:
+            try:
+                file_size = file_path.stat().st_size
+                file_path.unlink()
+                removed_files.append(str(file_path))
+                freed_space += file_size
+                self.logger.debug(f"Arquivo removido: {file_path}")
+            except Exception as e:
+                self.logger.warning(f"Erro ao remover arquivo {file_path}: {e}")
+        
+        # Remover diretórios vazios após remoção dos arquivos
+        for ano in anos:
+            year_dir = Path(f"files-parquet/{ano}")
+            if year_dir.exists():
+                self._remove_empty_month_dirs(year_dir)
+        
+        duration = time.time() - start_time
+        
+        self.logger.info(
+            f"✅ Consolidação multi-anual concluída para período {ano_inicio}-{ano_fim}: "
+            f"{total_records:,} registros CAGEDMOV consolidados em {consolidated_file.name}. "
+            f"{len(removed_files)} arquivos originais removidos, liberando {freed_space / (1024*1024):.2f} MB"
+        )
+        
+        return ProcessingResult(
+            item=item,
+            success=True,
+            duration=duration,
+            files_processed=len(all_cagedmov_files),
+            bytes_processed=output_size
+        )
+    
+    async def _process_single_year_consolidation(self, item: ProcessingItem, start_time: float) -> ProcessingResult:
+        """Processa consolidação de um único ano"""
+        self.logger.info(f"📊 Iniciando consolidação anual para {item.ano}")
+        
+        # Validar se existem arquivos para consolidar
+        if not self.validate_item(item):
+            self.logger.warning(f"⚠️  Nenhum arquivo CAGEDMOV encontrado para consolidação do ano {item.ano}")
+            return ProcessingResult(
+                item=item,
+                success=True,
+                duration=time.time() - start_time,
+                warnings=[f"Nenhum arquivo CAGEDMOV encontrado para consolidação do ano {item.ano}"]
+            )
+        
+        # Encontrar todos os arquivos parquet do ano que contêm CAGEDMOV
+        import polars as pl
+        
+        year_dir = Path(f"files-parquet/{item.ano}")
+        cagedmov_files = []
+        
+        # Buscar arquivos CAGEDMOV em todos os meses do ano
+        for month in range(1, 13):
+            month_dir = year_dir / f"{item.ano}{month:02d}"
+            if month_dir.exists():
+                # Filtrar apenas arquivos que contêm 'CAGEDMOV' no nome
+                month_files = [f for f in month_dir.glob("*.parquet") if "CAGEDMOV" in f.name]
+                cagedmov_files.extend(month_files)
+        
+        if not cagedmov_files:
+            raise PipelineError(f"Nenhum arquivo parquet CAGEDMOV encontrado para o ano {item.ano}")
+        
+        self.logger.info(f"Encontrados {len(cagedmov_files)} arquivos CAGEDMOV para consolidação")
+        
+        # Preparar diretório de saída (files-parquet/ANO/)
+        output_dir = Path(f"files-parquet/{item.ano}")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Nome do arquivo consolidado
+        consolidated_file = output_dir / f"CAGEDMOV{item.ano}.parquet"
+        
+        # Ler e consolidar todos os arquivos CAGEDMOV
+        dataframes = []
+        total_input_size = 0
+        
+        for file_path in cagedmov_files:
+            self.logger.debug(f"Lendo arquivo CAGEDMOV: {file_path}")
+            df = pl.read_parquet(file_path)
+            dataframes.append(df)
+            total_input_size += file_path.stat().st_size
+        
+        # Concatenar todos os DataFrames
+        self.logger.info("Consolidando dados CAGEDMOV...")
+        consolidated_df = pl.concat(dataframes)
+        
+        # Ordenar por data de movimentação se a coluna existir
+        date_columns = ['data_movimentacao', 'competencia_mov', 'data']
+        sort_column = None
+        for col in date_columns:
+            if col in consolidated_df.columns:
+                sort_column = col
+                break
+        
+        if sort_column:
+            self.logger.info(f"Ordenando dados por {sort_column}")
+            consolidated_df = consolidated_df.sort(sort_column)
+        
+        # Salvar arquivo consolidado
+        self.logger.info(f"Salvando arquivo consolidado: {consolidated_file}")
+        consolidated_df.write_parquet(
+            consolidated_file,
+            compression=self.output_config.compression
+        )
+        
+        # Verificar arquivo criado
+        if not consolidated_file.exists():
+            raise PipelineError("Falha ao criar arquivo consolidado")
+        
+        output_size = consolidated_file.stat().st_size
+        total_records = len(consolidated_df)
+        
+        # Remover arquivos CAGEDMOV originais após consolidação bem-sucedida
+        self.logger.info("Removendo arquivos CAGEDMOV originais...")
+        removed_files = []
+        freed_space = 0
+        
+        for file_path in cagedmov_files:
+            try:
+                file_size = file_path.stat().st_size
+                file_path.unlink()
+                removed_files.append(str(file_path))
+                freed_space += file_size
+                self.logger.debug(f"Arquivo removido: {file_path}")
+            except Exception as e:
+                self.logger.warning(f"Erro ao remover arquivo {file_path}: {e}")
+        
+        # Remover diretórios vazios após remoção dos arquivos
+        self._remove_empty_month_dirs(year_dir)
+        
+        duration = time.time() - start_time
+        
+        self.logger.info(
+            f"✅ Consolidação concluída para {item.ano}: "
+            f"{total_records:,} registros CAGEDMOV consolidados em {consolidated_file.name}. "
+            f"{len(removed_files)} arquivos originais removidos, liberando {freed_space / (1024*1024):.2f} MB"
+        )
+        
+        return ProcessingResult(
+            item=item,
+            success=True,
+            duration=duration,
+            files_processed=len(cagedmov_files),
+            bytes_processed=output_size
+        )
     
     def _remove_empty_month_dirs(self, year_dir: Path):
         """Remove diretórios de mês vazios após consolidação"""
