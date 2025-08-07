@@ -564,10 +564,176 @@ class CleanupStageHandler(PipelineStageHandler):
                     self.logger.debug(f"Diretório do ano removido: {year_path}")
         except OSError as e:
             self.logger.warning(f"Não foi possível remover o diretório {path}: {e}")
+
+
+class ConsolidateStageHandler(PipelineStageHandler):
+    """Handler para estágio de consolidação anual"""
+    
+    def __init__(self, config: CAGEDConfig, logger: logging.Logger):
+        super().__init__(config, logger)
+        self.output_config = config.output
+    
+    async def process(self, item: ProcessingItem) -> ProcessingResult:
+        """Processa consolidação de arquivos anuais"""
+        start_time = time.time()
+        
+        try:
+            self.logger.info(f"📊 Iniciando consolidação anual para {item.ano}")
+            
+            # Validar se existem arquivos para consolidar
+            if not self.validate_item(item):
+                self.logger.warning(f"⚠️  Nenhum arquivo CAGEDMOV encontrado para consolidação do ano {item.ano}")
+                return ProcessingResult(
+                    item=item,
+                    success=True,
+                    duration=time.time() - start_time,
+                    warnings=[f"Nenhum arquivo CAGEDMOV encontrado para consolidação do ano {item.ano}"]
+                )
+            
+            # Encontrar todos os arquivos parquet do ano que contêm CAGEDMOV
+            import polars as pl
+            
+            year_dir = Path(f"files-parquet/{item.ano}")
+            cagedmov_files = []
+            
+            # Buscar arquivos CAGEDMOV em todos os meses do ano
+            for month in range(1, 13):
+                month_dir = year_dir / f"{item.ano}{month:02d}"
+                if month_dir.exists():
+                    # Filtrar apenas arquivos que contêm 'CAGEDMOV' no nome
+                    month_files = [f for f in month_dir.glob("*.parquet") if "CAGEDMOV" in f.name]
+                    cagedmov_files.extend(month_files)
+            
+            if not cagedmov_files:
+                raise PipelineError(f"Nenhum arquivo parquet CAGEDMOV encontrado para o ano {item.ano}")
+            
+            self.logger.info(f"Encontrados {len(cagedmov_files)} arquivos CAGEDMOV para consolidação")
+            
+            # Preparar diretório de saída (files-parquet/ANO/)
+            output_dir = Path(f"files-parquet/{item.ano}")
+            output_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Nome do arquivo consolidado
+            consolidated_file = output_dir / f"CAGEDMOV{item.ano}.parquet"
+            
+            # Ler e consolidar todos os arquivos CAGEDMOV
+            dataframes = []
+            total_input_size = 0
+            
+            for file_path in cagedmov_files:
+                self.logger.debug(f"Lendo arquivo CAGEDMOV: {file_path}")
+                df = pl.read_parquet(file_path)
+                dataframes.append(df)
+                total_input_size += file_path.stat().st_size
+            
+            # Concatenar todos os DataFrames
+            self.logger.info("Consolidando dados CAGEDMOV...")
+            consolidated_df = pl.concat(dataframes)
+            
+            # Ordenar por data de movimentação se a coluna existir
+            date_columns = ['data_movimentacao', 'competencia_mov', 'data']
+            sort_column = None
+            for col in date_columns:
+                if col in consolidated_df.columns:
+                    sort_column = col
+                    break
+            
+            if sort_column:
+                self.logger.info(f"Ordenando dados por {sort_column}")
+                consolidated_df = consolidated_df.sort(sort_column)
+            
+            # Salvar arquivo consolidado
+            self.logger.info(f"Salvando arquivo consolidado: {consolidated_file}")
+            consolidated_df.write_parquet(
+                consolidated_file,
+                compression=self.output_config.compression
+            )
+            
+            # Verificar arquivo criado
+            if not consolidated_file.exists():
+                raise PipelineError("Falha ao criar arquivo consolidado")
+            
+            output_size = consolidated_file.stat().st_size
+            total_records = len(consolidated_df)
+            
+            # Remover arquivos CAGEDMOV originais após consolidação bem-sucedida
+            self.logger.info("Removendo arquivos CAGEDMOV originais...")
+            removed_files = []
+            freed_space = 0
+            
+            for file_path in cagedmov_files:
+                try:
+                    file_size = file_path.stat().st_size
+                    file_path.unlink()
+                    removed_files.append(str(file_path))
+                    freed_space += file_size
+                    self.logger.debug(f"Arquivo removido: {file_path}")
+                except Exception as e:
+                    self.logger.warning(f"Erro ao remover arquivo {file_path}: {e}")
+            
+            # Remover diretórios vazios após remoção dos arquivos
+            self._remove_empty_month_dirs(year_dir)
+            
+            duration = time.time() - start_time
+            
+            self.logger.info(
+                f"✅ Consolidação concluída para {item.ano}: "
+                f"{total_records:,} registros CAGEDMOV consolidados em {consolidated_file.name}. "
+                f"{len(removed_files)} arquivos originais removidos, liberando {freed_space / (1024*1024):.2f} MB"
+            )
+            
+            return ProcessingResult(
+                item=item,
+                success=True,
+                duration=duration,
+                files_processed=len(cagedmov_files),
+                bytes_processed=output_size
+            )
+            
+        except Exception as e:
+            duration = time.time() - start_time
+            error_msg = f"Erro na consolidação: {e}"
+            self.logger.error(error_msg)
+            
+            return ProcessingResult(
+                item=item,
+                success=False,
+                duration=duration,
+                errors=[error_msg]
+            )
+    
+    def _remove_empty_month_dirs(self, year_dir: Path):
+        """Remove diretórios de mês vazios após consolidação"""
+        for month in range(1, 13):
+            month_dir = year_dir / f"{year_dir.name}{month:02d}"
+            if month_dir.exists():
+                try:
+                    # Verificar se o diretório está vazio
+                    if not any(month_dir.iterdir()):
+                        month_dir.rmdir()
+                        self.logger.debug(f"Diretório do mês removido: {month_dir}")
+                except OSError as e:
+                    self.logger.warning(f"Não foi possível remover o diretório {month_dir}: {e}")
     
     def validate_item(self, item: ProcessingItem) -> bool:
-        """Valida se o item pode ser limpo"""
-        return True  # Limpeza sempre pode ser executada
+        """Valida se o item pode ser consolidado"""
+        from pathlib import Path
+        
+        # Verificar se existe pelo menos um arquivo parquet CAGEDMOV do ano
+        year_dir = Path(f"files-parquet/{item.ano}")
+        if not year_dir.exists():
+            return False
+        
+        # Buscar arquivos CAGEDMOV em qualquer mês do ano
+        for month in range(1, 13):
+            month_dir = year_dir / f"{item.ano}{month:02d}"
+            if month_dir.exists():
+                # Verificar se existe pelo menos um arquivo com 'CAGEDMOV' no nome
+                cagedmov_files = [f for f in month_dir.glob("*.parquet") if "CAGEDMOV" in f.name]
+                if cagedmov_files:
+                    return True
+        
+        return False
 
 
 def create_stage_handlers(config: CAGEDConfig) -> Dict[ProcessingStage, PipelineStageHandler]:
@@ -578,6 +744,7 @@ def create_stage_handlers(config: CAGEDConfig) -> Dict[ProcessingStage, Pipeline
         ProcessingStage.DOWNLOAD: DownloadStageHandler(config, logger),
         ProcessingStage.EXTRACT: ExtractStageHandler(config, logger),
         ProcessingStage.CONVERT: ConvertStageHandler(config, logger),
+        ProcessingStage.CONSOLIDATE: ConsolidateStageHandler(config, logger),
         ProcessingStage.VALIDATE: ValidateStageHandler(config, logger),
         ProcessingStage.CLEANUP: CleanupStageHandler(config, logger)
     }

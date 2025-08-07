@@ -29,6 +29,7 @@ class ProcessingStage(Enum):
     DOWNLOAD = "download"
     EXTRACT = "extract"
     CONVERT = "convert"
+    CONSOLIDATE = "consolidate"
     VALIDATE = "validate"
     CLEANUP = "cleanup"
 
