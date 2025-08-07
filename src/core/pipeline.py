@@ -260,25 +260,30 @@ class CAGEDPipeline:
         """Cria itens de processamento para um ano e meses específicos"""
         items = []
         
-        # Se a lista de meses estiver vazia, busca os meses disponíveis no FTP
-        if not months:
-            try:
-                from ..services.ftp_service import FTPService
-                ftp_service = FTPService(self.config)
-                
-                available_months = ftp_service.list_remote_directories(year)
-                
-                if not available_months:
-                    self.logger.warning(f"Nenhum mês encontrado para o ano {year} no FTP.")
-                    return []
-                
-                months = available_months
-                    
-            except Exception as e:
-                self.logger.error(f"Erro ao buscar meses do FTP para o ano {year}: {e}")
-                raise PipelineError(f"Não foi possível obter a lista de meses para {year}")
+        try:
+            from ..services.ftp_service import FTPService
+            ftp_service = FTPService(self.config)
+            available_months = ftp_service.list_remote_directories(year)
 
-        for month in months:
+            if not available_months:
+                self.logger.warning(f"Nenhum mês encontrado para o ano {year} no FTP.")
+                return []
+
+        except Exception as e:
+            self.logger.error(f"Erro ao buscar meses do FTP para o ano {year}: {e}")
+            raise PipelineError(f"Não foi possível obter a lista de meses para {year}")
+
+        # Filtra os meses solicitados com base nos meses disponíveis
+        if months:
+            final_months = [m for m in months if m in available_months]
+            if not final_months:
+                self.logger.warning(f"Nenhum dos meses solicitados {months} está disponível para o ano {year}.")
+                return []
+        else:
+            # Se nenhum mês específico foi solicitado, usa todos os disponíveis
+            final_months = available_months
+
+        for month in final_months:
             item_id = f"caged_{year}_{month:02d}"
             item = ProcessingItem(
                 id=item_id,
@@ -339,7 +344,8 @@ class CAGEDPipeline:
                     }
                 )
                 
-                total_files += stage_result.files_processed
+                if stage == ProcessingStage.CONVERT:
+                    total_files = stage_result.files_processed
                 total_bytes += stage_result.bytes_processed
                 all_errors.extend(stage_result.errors)
                 all_warnings.extend(stage_result.warnings)

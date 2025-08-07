@@ -57,6 +57,10 @@ class CleanupStageHandler(PipelineStageHandler):
                 files_deleted += 1
                 self.logger.debug(f"Arquivo de texto removido: {unzip_filepath}")
 
+            # Lógica para remover diretórios vazios
+            self._remove_empty_dirs(zip_filepath.parent)
+            self._remove_empty_dirs(unzip_filepath.parent)
+
             duration = time.time() - start_time
             self.logger.info(f"✅ Limpeza concluída para {item.id}: {files_deleted} arquivos removidos.")
 
@@ -78,6 +82,24 @@ class CleanupStageHandler(PipelineStageHandler):
                 duration=duration,
                 errors=[error_msg]
             )
+
+    def _remove_empty_dirs(self, path: Path):
+        """Remove diretórios vazios recursivamente."""
+        if not path.is_dir():
+            return
+
+        # Remove o diretório do mês
+        try:
+            if not any(path.iterdir()):
+                os.rmdir(path)
+                self.logger.debug(f"Diretório do mês removido: {path}")
+                # Tenta remover o diretório do ano
+                year_path = path.parent
+                if not any(year_path.iterdir()):
+                    os.rmdir(year_path)
+                    self.logger.debug(f"Diretório do ano removido: {year_path}")
+        except OSError as e:
+            self.logger.warning(f"Não foi possível remover o diretório {path}: {e}")
 
 
 class DownloadStageHandler(PipelineStageHandler):
@@ -370,7 +392,7 @@ class ConvertStageHandler(PipelineStageHandler):
                 item=item,
                 success=True,
                 duration=duration,
-                files_processed=len(converted_files),
+                files_processed=1,
                 bytes_processed=total_size
             )
             

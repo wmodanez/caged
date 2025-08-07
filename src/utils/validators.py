@@ -356,8 +356,7 @@ class CAGEDValidator:
         ano_inicio: Optional[int] = None,
         mes_inicio: Optional[int] = None,
         ano_fim: Optional[int] = None,
-        mes_fim: Optional[int] = None,
-        todos_meses: bool = False
+        mes_fim: Optional[int] = None
     ) -> List[Tuple[int, int]]:
         """
         Valida os parâmetros de entrada e retorna a lista de meses a processar.
@@ -368,15 +367,15 @@ class CAGEDValidator:
         Returns:
             Lista de tuplas (ano, mes).
         """
-        # Modo 1: Ano específico
-        if ano and not mes and not todos_meses and not any([ano_inicio, mes_inicio, ano_fim, mes_fim]):
+        # Modo 1: Ano específico (processa todos os meses automaticamente)
+        if ano and not mes and not any([ano_inicio, mes_inicio, ano_fim, mes_fim]):
             valido, msg = DateValidator.validate_year_month(ano)
             if not valido:
                 raise ValidationError(msg)
             return [(ano, m) for m in range(1, 13)]
 
         # Modo 2: Mês específico
-        if ano and mes and not todos_meses:
+        if ano and mes:
             valido, msg = DateValidator.validate_year_month(ano, mes)
             if not valido:
                 raise ValidationError(msg)
@@ -399,12 +398,7 @@ class CAGEDValidator:
                     meses.append((a, m))
             return meses
 
-        # Modo 4: Todos os meses de um ano
-        if ano and todos_meses:
-            valido, msg = DateValidator.validate_year_month(ano)
-            if not valido:
-                raise ValidationError(msg)
-            return [(ano, m) for m in range(1, 13)]
+
 
         raise ValidationError("Combinação de parâmetros inválida. Use --help para ver as opções.")
     """

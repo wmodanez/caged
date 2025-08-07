@@ -89,7 +89,7 @@ def cli(ctx, config, profile, debug):
 @click.option('--mes-inicio', type=int, help='Mês inicial para faixa')
 @click.option('--ano-fim', type=int, help='Ano final para faixa')
 @click.option('--mes-fim', type=int, help='Mês final para faixa')
-@click.option('--todos-meses', is_flag=True, help='Processar todos os meses do ano')
+
 @click.option('--download', is_flag=True, help='Executar etapa de download')
 @click.option('--extract', is_flag=True, help='Executar etapa de extração')
 @click.option('--convert', is_flag=True, help='Executar etapa de conversão')
@@ -104,7 +104,7 @@ def cli(ctx, config, profile, debug):
 @click.option('--parallel-items', is_flag=True, help='Executar paralelismo entre itens em vez de entre estágios')
 @click.option('--limpar-arquivos', is_flag=True, help='Apagar arquivos após o processamento bem-sucedido')
 @click.pass_context
-def processar(ctx, ano, mes, ano_inicio, mes_inicio, ano_fim, mes_fim, todos_meses,
+def processar(ctx, ano, mes, ano_inicio, mes_inicio, ano_fim, mes_fim,
              download, extract, convert, skip_download, skip_extract, skip_convert,
              campos, dry_run, workers, resume, sequential, parallel_items, limpar_arquivos):
     """
@@ -133,7 +133,7 @@ def processar(ctx, ano, mes, ano_inicio, mes_inicio, ano_fim, mes_fim, todos_mes
     python main.py processar --ano 2024 --mes 1 --skip-download --extract --convert
     
     # Processar todos os meses do ano
-    python main.py processar --ano 2024 --todos-meses
+    python main.py processar --ano 2024
     
     # Processar faixa de datas
     python main.py processar --ano-inicio 2023 --mes-inicio 6 --ano-fim 2024 --mes-fim 3
@@ -232,8 +232,7 @@ def processar(ctx, ano, mes, ano_inicio, mes_inicio, ano_fim, mes_fim, todos_mes
             meses_a_processar = CAGEDValidator.validar_e_obter_meses(
                 ano=ano, mes=mes,
                 ano_inicio=ano_inicio, mes_inicio=mes_inicio,
-                ano_fim=ano_fim, mes_fim=mes_fim,
-                todos_meses=todos_meses
+                ano_fim=ano_fim, mes_fim=mes_fim
             )
         except ValidationError as e:
             logger.error(f"Erro de validação: {e}")
@@ -277,8 +276,7 @@ def processar(ctx, ano, mes, ano_inicio, mes_inicio, ano_fim, mes_fim, todos_mes
             click.echo(f"   ⚙️ Etapas: {', '.join([_get_stage_name(s) for s in stages])}")
             click.echo(f"   ⏱️ Tempo estimado: {estimated_time}")
             
-            if use_cache:
-                click.echo(f"   💾 Cache: Habilitado")
+
             if workers and workers > 1:
                 click.echo(f"   ⚡ Workers: {workers} (paralelo)")
             
@@ -298,7 +296,6 @@ def processar(ctx, ano, mes, ano_inicio, mes_inicio, ano_fim, mes_fim, todos_mes
             'mes_inicio': mes_inicio,
             'ano_fim': ano_fim,
             'mes_fim': mes_fim,
-            'todos_meses': todos_meses,
             'stages': [s.value for s in stages],
             'total_items': len(items),
             'workers': workers

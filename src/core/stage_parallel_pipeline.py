@@ -289,7 +289,13 @@ class StageParallelPipeline(CAGEDPipeline):
         duration = time.time() - tracked_item["start_time"]
         
         # Agregar estatísticas de todos os estágios
-        files_processed = sum(r.files_processed for r in stage_results.values() if hasattr(r, 'files_processed'))
+        # Para files_processed, usar apenas o resultado do estágio CONVERT
+        files_processed = 0
+        if ProcessingStage.CONVERT in stage_results:
+            convert_result = stage_results[ProcessingStage.CONVERT]
+            if hasattr(convert_result, 'files_processed'):
+                files_processed = convert_result.files_processed
+        
         bytes_processed = sum(r.bytes_processed for r in stage_results.values() if hasattr(r, 'bytes_processed'))
         
         # Agregar avisos de todos os estágios
