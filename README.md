@@ -204,7 +204,6 @@ O sistema oferece três modos de processamento:
 - **🚨 Tratamento de Exceções**: Hierarquia de exceções customizadas
 - **📊 Monitoramento**: Sistema de logging e métricas integrado
 - **🎛️ CLI Unificada**: Interface simplificada e intuitiva
-- **💾 Cache Inteligente**: Otimização automática com verificação de integridade
 - **🔍 Validação Robusta**: Sistema de validação com 26+ testes automatizados
 - **🔄 Sistema de Recovery**: Checkpoints automáticos e recuperação de falhas
 
@@ -215,7 +214,6 @@ O sistema oferece três modos de processamento:
 - **Entities**: Modelos de dados do CAGED
 - **Utils**: Utilitários, validadores, logging e cache
 - **CLI**: Interface de linha de comando unificada
-- **Cache**: Sistema de cache inteligente com metadados
 - **Recovery**: Sistema de checkpoints e recuperação automática
 - **Tests**: Suíte de testes automatizados
 
@@ -228,7 +226,6 @@ caged/
 ├── README.md                 # Este arquivo
 ├── PLANO_MELHORIAS_CAGED.md  # Plano de desenvolvimento
 ├── config/                   # Arquivos de configuração
-├── cache/                    # Cache do sistema
 ├── examples/                 # Exemplos de uso
 │   ├── cache_usage_example.py # Exemplo de uso do cache
 │   └── parallel_processing_example.py # Exemplo de processamento paralelo
@@ -274,19 +271,6 @@ caged/
         └── filtro_caged.py   # Filtros CAGED
 ```
 
-## 💾 Sistema de Cache Inteligente
-
-O sistema implementa um cache avançado para otimizar o processamento de dados:
-
-### 🎯 Funcionalidades do Cache
-
-- **Verificação de Integridade**: Checksums MD5 para garantir a validade dos arquivos
-- **Expiração Automática**: Configuração flexível de tempo de vida dos itens
-- **Limpeza Inteligente**: Remoção automática por tamanho e expiração
-- **Categorização**: Diferentes tipos de cache (downloads, extrações, conversões)
-- **Persistência**: Metadados salvos em JSON para recuperação entre sessões
-- **Métricas Detalhadas**: Estatísticas de uso, hit rate e performance
-
 ## ⚡ Sistema de Processamento Paralelo
 
 O sistema implementa dois tipos de processamento paralelo para otimizar performance:
@@ -309,7 +293,6 @@ Com este modo, assim que um download é concluído, a extração começa imediat
 
 - **Controle Inteligente de Recursos**: Monitoramento em tempo real de CPU, memória e disco
 - **Pool de Conexões**: Gerenciamento eficiente de conexões de banco de dados
-- **Cache Integrado**: Cache de resultados com serialização automática
 - **Ajuste Automático**: Número de workers baseado na carga do sistema
 - **Sistema de Throttling**: Prevenção de sobrecarga do sistema
 - **Estatísticas Detalhadas**: Métricas de performance e uso de recursos
@@ -337,22 +320,6 @@ Com este modo, assim que um download é concluído, a extração começa imediat
 - **Economia de Tempo**: Processamento até 80% mais rápido em re-execuções
 - **Economia de Banda**: Redução significativa no tráfego de rede
 
-### 🔧 Comandos de Cache
-
-```bash
-# Verificar estatísticas do cache
-python main.py cache-stats
-
-# Limpar cache expirado
-python main.py cache-clear --expired
-
-# Limpar todo o cache
-python main.py cache-clear --all
-
-# Limpar cache por categoria
-python main.py cache-clear --category downloads
-```
-
 ### ⚡ Comandos de Processamento Paralelo
 
 ```bash
@@ -378,16 +345,6 @@ results = await pipeline.process_items_parallel(items)
 O sistema pode ser configurado através do arquivo de configuração:
 
 ```yaml
-cache:
-  enabled: true
-  directory: "cache"
-  max_size_gb: 10
-  default_expiry_hours: 24
-  categories:
-    downloads: 168  # 7 dias
-    extractions: 72  # 3 dias
-    conversions: 48  # 2 dias
-
 parallel_processing:
   max_workers: 4
   resource_check_interval: 5  # segundos
@@ -691,21 +648,6 @@ python main.py processar --ano 2024 --mes 1 --use-cache
 
 # Processamento paralelo com 8 workers
 python main.py processar --ano 2024 --mes 1 --workers 8
-
-# Verificar estatísticas do cache
-python main.py cache-stats
-```
-
-### 🔧 Gerenciamento de Cache
-```bash
-# Ver estatísticas detalhadas do cache
-python main.py cache-stats
-
-# Limpar apenas itens expirados
-python main.py cache-clear --expired
-
-# Limpar cache de downloads
-python main.py cache-clear --category downloads
 ```
 
 ### 📊 Uso Programático
@@ -750,7 +692,6 @@ print(f"Taxa de sucesso: {report['summary']['overall_success_rate']:.1%}")
 - [x] ✅ Sistema de validação robusto (26+ testes)
 
 ### ⚡ Fase 2: Pipeline Otimizado (Concluída)
-- [x] ✅ Sistema de cache inteligente (18 testes aprovados)
 - [x] ✅ Processamento paralelo (19 testes aprovados)
 - [x] ✅ Comando processar unificado (integração completa)
 - [x] ✅ Sistema de configuração YAML
@@ -765,7 +706,6 @@ print(f"Taxa de sucesso: {report['summary']['overall_success_rate']:.1%}")
 - [ ] 🌐 API REST
 
 ### 🧪 Qualidade e Testes
-- [x] ✅ Testes de cache (18 testes)
 - [x] ✅ Testes de validação (26 testes)
 - [x] ✅ Testes de processamento paralelo (19 testes)
 - [x] ✅ Testes de recovery (19 testes)
@@ -791,7 +731,6 @@ print(f"Taxa de sucesso: {report['summary']['overall_success_rate']:.1%}")
 
 #### 3.4 Documentação e Exemplos
 - [x] ✅ **README Atualizado**: Incorporadas as funcionalidades de processamento anual automático e estrutura de diretórios
-- [ ] **Guia de Migração**: Documentação para migração da versão anterior
 - [ ] **Documentar Configurações**: Documentação completa de todas as opções de configuração
 - [ ] **Exemplos Práticos**: Casos de uso reais e exemplos avançados
 - [ ] **FAQ**: Perguntas frequentes e solução de problemas comuns
@@ -867,4 +806,4 @@ Para dúvidas, problemas ou sugestões, consulte a documentação completa ou ab
 
 ---
 
-**Desenvolvido com ❤️ para facilitar o acesso aos dados do mercado de trabalho brasileiro.**
+**Desenvolvido para facilitar o acesso aos dados do mercado de trabalho brasileiro.**
