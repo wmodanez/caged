@@ -141,8 +141,8 @@ def processar(ctx, ano, mes, ano_inicio, mes_inicio, ano_fim, mes_fim,
     # Apenas validação (dry-run)
     python main.py processar --ano 2024 --mes 1 --dry-run
     
-    # Com cache e paralelismo
-    python main.py processar --ano 2024 --mes 1 --use-cache --workers 8
+    # Com paralelismo
+    python main.py processar --ano 2024 --mes 1 --workers 8
     """
     logger = ctx.obj['logger']
     
@@ -516,12 +516,6 @@ def config_show(ctx):
         click.echo(f"  Timeout: {config.ftp.timeout}s")
         click.echo(f"  Max retries: {config.ftp.max_retries}")
         
-        click.echo(f"\n💾 Cache:")
-        click.echo(f"  Habilitado: {config.cache.enabled}")
-        click.echo(f"  Diretório: {config.cache.directory}")
-        click.echo(f"  Tamanho máximo: {config.cache.max_size_gb}GB")
-        click.echo(f"  Expiração: {config.cache.expiry_days} dias")
-        
         click.echo(f"\n⚙️ Processamento:")
         click.echo(f"  Workers: {config.processing.max_workers}")
         click.echo(f"  Chunk size: {config.processing.chunk_size:,}")
@@ -566,7 +560,6 @@ def config_validate(ctx, profile):
         # Mostrar algumas informações úteis
         click.echo(f"\n📊 Resumo da configuração:")
         click.echo(f"  🌐 FTP: {config.ftp.server}")
-        click.echo(f"  💾 Cache: {'habilitado' if config.cache.enabled else 'desabilitado'}")
         click.echo(f"  ⚙️ Workers: {config.processing.max_workers}")
         click.echo(f"  📤 Formato: {config.output.format}")
         click.echo(f"  📝 Log level: {config.logging.level}")
@@ -609,14 +602,12 @@ def config_list(ctx, profile, list_profiles):
             
             # Extrair informações básicas
             ftp_server = profile_data.get('ftp', {}).get('server', 'N/A')
-            cache_enabled = profile_data.get('cache', {}).get('enabled', False)
             workers = profile_data.get('processing', {}).get('max_workers', 'N/A')
             output_format = profile_data.get('output', {}).get('format', 'N/A')
             
             status = "✅" if profile_name == ctx.obj['profile'] else "📋"
             click.echo(f"\n{status} {profile_name}:")
             click.echo(f"    🌐 FTP: {ftp_server}")
-            click.echo(f"    💾 Cache: {'habilitado' if cache_enabled else 'desabilitado'}")
             click.echo(f"    ⚙️ Workers: {workers}")
             click.echo(f"    📤 Formato: {output_format}")
         
@@ -632,7 +623,7 @@ def config_list(ctx, profile, list_profiles):
 
 @cli.command()
 @click.option('--profile', default='default', help='Profile de configuração')
-@click.option('--section', help='Seção da configuração (ftp, cache, processing, output, logging)')
+@click.option('--section', help='Seção da configuração (ftp, processing, output, logging)')
 @click.option('--key', help='Chave da configuração')
 @click.option('--value', help='Novo valor')
 @click.pass_context
@@ -655,7 +646,7 @@ def config_set(ctx, profile, section, key, value):
         # Verificar se a seção existe
         if not hasattr(config, section):
             click.echo(f"❌ Seção '{section}' não encontrada")
-            click.echo("💡 Seções disponíveis: ftp, cache, processing, output, logging")
+            click.echo("💡 Seções disponíveis: ftp, processing, output, logging")
             sys.exit(1)
         
         section_obj = getattr(config, section)
@@ -1117,7 +1108,7 @@ def metrics(output_format, save, clear, filter_operation, since, alerts_only):
     📊 Visualizar Métricas de Performance
     
     Exibe métricas coletadas durante o processamento do sistema CAGED,
-    incluindo performance, recursos, qualidade e cache.
+    incluindo performance, recursos, qualidade.
     
     EXEMPLOS DE USO:
     
@@ -1239,16 +1230,6 @@ def metrics(output_format, save, clear, filter_operation, since, alerts_only):
                 click.echo(f"   Disco Livre: {resources.get('disk_free_gb', 0):.1f} GB")
                 click.echo()
             
-            # Cache
-            if report.get('cache'):
-                cache = report['cache']
-                click.echo("🗄️ Estatísticas de Cache:")
-                click.echo(f"   Hits: {cache.get('hits', 0)}")
-                click.echo(f"   Misses: {cache.get('misses', 0)}")
-                click.echo(f"   Taxa de Acerto: {cache.get('hit_rate', 0):.1%}")
-                click.echo(f"   Habilitado: {'Sim' if cache.get('enabled', False) else 'Não'}")
-                click.echo()
-            
         else:  # summary (padrão)
             click.echo("📊 Resumo das Métricas de Performance")
             click.echo("=" * 50)
@@ -1274,13 +1255,6 @@ def metrics(output_format, save, clear, filter_operation, since, alerts_only):
                 click.echo(f"   CPU: {current_resources.cpu_percent:.1f}%")
                 click.echo(f"   Memória: {current_resources.memory_percent:.1f}%")
                 click.echo(f"   Disco Livre: {current_resources.disk_free_gb:.1f} GB")
-            
-            # Cache stats
-            cache_stats = report.get('cache', {})
-            if cache_stats.get('hits', 0) + cache_stats.get('misses', 0) > 0:
-                hit_rate = cache_stats.get('hit_rate', 0)
-                click.echo()
-                click.echo(f"🗄️ Cache: {hit_rate:.1%} de acerto ({cache_stats.get('hits', 0)} hits, {cache_stats.get('misses', 0)} misses)")
             
             click.echo()
             click.echo("💡 Use --format table ou --format json para mais detalhes")

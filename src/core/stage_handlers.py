@@ -225,11 +225,7 @@ class ExtractStageHandler(PipelineStageHandler):
                     success=True,
                     duration=time.time() - start_time,
                     warnings=[f"Arquivo de entrada para {item.id} não encontrado."]
-                )
-            
-            # Verificar cache
-            cache_key = f"extract_{item.ano}_{item.mes:02d}"
-            
+                )           
 
             
             # Executar extração real usando ExtractService
@@ -510,11 +506,8 @@ class CleanupStageHandler(PipelineStageHandler):
                         f.unlink()
                         cleaned_files.append(str(f))
                         freed_space += file_size
-                # Tentar remover o diretório se estiver vazio
-                try:
-                    zip_dir.rmdir()
-                except OSError:
-                    pass # Ignora se não estiver vazio
+                # Remover diretórios vazios recursivamente
+                self._remove_empty_dirs(zip_dir)
 
             # Limpar diretório de unzips
             if unzip_dir.exists():
@@ -524,11 +517,8 @@ class CleanupStageHandler(PipelineStageHandler):
                         f.unlink()
                         cleaned_files.append(str(f))
                         freed_space += file_size
-                # Tentar remover o diretório se estiver vazio
-                try:
-                    unzip_dir.rmdir()
-                except OSError:
-                    pass # Ignora se não estiver vazio
+                # Remover diretórios vazios recursivamente
+                self._remove_empty_dirs(unzip_dir)
             
             duration = time.time() - start_time
             
@@ -556,6 +546,24 @@ class CleanupStageHandler(PipelineStageHandler):
                 duration=duration,
                 errors=[error_msg]
             )
+    
+    def _remove_empty_dirs(self, path: Path):
+        """Remove diretórios vazios recursivamente."""
+        if not path.is_dir():
+            return
+
+        # Remove o diretório do mês
+        try:
+            if not any(path.iterdir()):
+                path.rmdir()
+                self.logger.debug(f"Diretório do mês removido: {path}")
+                # Tenta remover o diretório do ano
+                year_path = path.parent
+                if year_path.exists() and not any(year_path.iterdir()):
+                    year_path.rmdir()
+                    self.logger.debug(f"Diretório do ano removido: {year_path}")
+        except OSError as e:
+            self.logger.warning(f"Não foi possível remover o diretório {path}: {e}")
     
     def validate_item(self, item: ProcessingItem) -> bool:
         """Valida se o item pode ser limpo"""

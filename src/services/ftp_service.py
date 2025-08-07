@@ -22,7 +22,7 @@ from contextlib import contextmanager
 logger = logging.getLogger("caged")
 
 # Importar sistema de métricas
-from ..utils.metrics import record_operation, record_cache_hit, record_cache_miss
+from ..utils.metrics import record_operation
 
 
 @dataclass

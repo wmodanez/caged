@@ -68,11 +68,6 @@ class ConfigurationError(CAGEDException):
     pass
 
 
-class CacheError(CAGEDException):
-    """Erro relacionado ao sistema de cache"""
-    pass
-
-
 class PipelineError(CAGEDException):
     """Erro no pipeline de processamento"""
     pass

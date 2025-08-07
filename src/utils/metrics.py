@@ -215,12 +215,6 @@ class MetricsCollector:
             "timestamp": current_time.isoformat(),
             "session_duration_minutes": session_duration / 60,
             "operations": {},
-            "cache": {
-                "hit_rate": self.get_cache_hit_rate(),
-                "total_hits": self.metrics["cache_operations"]["hits"],
-                "total_misses": self.metrics["cache_operations"]["misses"],
-                "total_saves": self.metrics["cache_operations"]["saves"]
-            },
             "resources": {
                 "current": asdict(current_resources),
                 "history_count": len(self.resource_history)
@@ -284,16 +278,6 @@ class MetricsCollector:
                     "severity": "warning" if success_rate > 0.5 else "critical"
                 })
         
-        # Verificar cache hit rate baixo
-        cache_hit_rate = self.get_cache_hit_rate()
-        total_cache_ops = self.metrics["cache_operations"]["hits"] + self.metrics["cache_operations"]["misses"]
-        if cache_hit_rate < 0.3 and total_cache_ops > 10:
-            alerts.append({
-                "type": "low_cache_hit_rate",
-                "hit_rate": cache_hit_rate,
-                "severity": "warning"
-            })
-        
         # Verificar recursos do sistema
         if self.resource_history:
             latest_resources = self.resource_history[-1]
@@ -353,8 +337,6 @@ class MetricsCollector:
                 if isinstance(self.metrics[category], dict):
                     if "total" in self.metrics[category]:
                         self.metrics[category] = {"total": 0, "success": 0, "failed": 0, "total_duration": 0.0}
-                    elif category == "cache_operations":
-                        self.metrics[category] = {"hits": 0, "misses": 0, "saves": 0}
             
             self.operation_history.clear()
             self.resource_history.clear()
@@ -398,22 +380,6 @@ def record_operation(operation: str, success: bool, duration: float,
         details: Detalhes adicionais
     """
     get_metrics_collector().record_operation(operation, success, duration, details)
-
-
-def record_cache_hit() -> None:
-    """Registra um cache hit."""
-    get_metrics_collector().record_cache_operation("hit")
-
-
-def record_cache_miss() -> None:
-    """Registra um cache miss."""
-    get_metrics_collector().record_cache_operation("miss")
-
-
-def record_cache_save() -> None:
-    """Registra uma operação de save no cache."""
-    get_metrics_collector().record_cache_operation("save")
-
 
 def generate_metrics_report() -> Dict[str, Any]:
     """Gera relatório de métricas.

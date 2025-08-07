@@ -52,18 +52,19 @@ class LoggerConfig:
     
     # Emojis para diferentes níveis de log
     EMOJIS = {
+        # Níveis de log
         "debug": "🔍",
         "info": "ℹ️",
         "warning": "⚠️",
         "error": "❌",
         "critical": "🚨",
+        
         # Categorias específicas
         "success": "✅",
         "download": "📥",
         "extract": "📦",
         "convert": "🔄",
         "validate": "✓",
-        "cache": "💾",
         "performance": "⚡",
         "metric": "📊",
     }

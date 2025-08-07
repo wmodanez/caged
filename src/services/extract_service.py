@@ -29,7 +29,7 @@ import logging
 logger = logging.getLogger("caged")
 
 # Importar sistema de métricas
-from ..utils.metrics import record_operation, record_cache_hit, record_cache_miss
+from ..utils.metrics import record_operation
 
 
 class MonitorDescompactacao:
@@ -61,9 +61,7 @@ class MonitorDescompactacao:
             'falhas': 0,
             'bytes_processados': 0,
             'arquivos_verificados': 0,
-            'arquivos_ignorados': 0,
-            'cache_hits': 0,
-            'cache_misses': 0
+            'arquivos_ignorados': 0
         }
         
         # Histórico de performance (últimas 100 operações)
@@ -152,14 +150,6 @@ class MonitorDescompactacao:
                 f"Problema recorrente detectado: {tipo_erro} ({self.problemas_recorrentes[tipo_erro]} ocorrências)",
                 "warning"
             )
-    
-    def registrar_cache_hit(self):
-        """Registra um acerto no cache"""
-        self.contadores['cache_hits'] += 1
-    
-    def registrar_cache_miss(self):
-        """Registra uma falha no cache"""
-        self.contadores['cache_misses'] += 1
     
     def registrar_arquivo_ignorado(self):
         """Registra um arquivo que foi ignorado (já processado)"""
@@ -273,9 +263,8 @@ class MonitorDescompactacao:
         Args:
             tempo_total: Tempo total da operação
         """
-        total_processados = self.contadores['sucessos'] + self.contadores['falhas']
         taxa_sucesso = self.obter_taxa_sucesso()
-        velocidade = total_processados / tempo_total if tempo_total > 0 else 0
+        velocidade = (self.contadores['sucessos'] + self.contadores['falhas']) / tempo_total if tempo_total > 0 else 0
         
         emoji = "📊" if self.usar_emojis else ""
         self.logger.info(f"{emoji} === RELATÓRIO DE MONITORAMENTO ===")
@@ -288,13 +277,6 @@ class MonitorDescompactacao:
         self.logger.info(f"{emoji_stats} Falhas: {self.contadores['falhas']}")
         self.logger.info(f"{emoji_stats} Taxa de sucesso: {taxa_sucesso:.1f}%")
         self.logger.info(f"{emoji_stats} Velocidade: {velocidade:.2f} arquivos/s")
-        
-        # Estatísticas de cache
-        total_cache = self.contadores['cache_hits'] + self.contadores['cache_misses']
-        if total_cache > 0:
-            taxa_cache = (self.contadores['cache_hits'] / total_cache) * 100
-            emoji_cache = "💾" if self.usar_emojis else ""
-            self.logger.info(f"{emoji_cache} Cache hits: {self.contadores['cache_hits']} ({taxa_cache:.1f}%)")
         
         # Bytes processados
         if self.contadores['bytes_processados'] > 0:
@@ -311,39 +293,6 @@ class MonitorDescompactacao:
                 self.logger.info(f"  - {alerta['nivel'].upper()}: {alerta['mensagem']}")
         
         self.logger.info("=" * 50)
-    
-    def obter_estatisticas_historico(self) -> Dict[str, Any]:
-        """
-        Obtém estatísticas do histórico de operações
-        
-        Returns:
-            Dicionário com estatísticas históricas
-        """
-        if not self.historico_performance:
-            return {}
-        
-        tempos = [op['tempo_total'] for op in self.historico_performance]
-        sucessos = [op['sucessos'] for op in self.historico_performance]
-        falhas = [op['falhas'] for op in self.historico_performance]
-        
-        return {
-            'total_operacoes': len(self.historico_performance),
-            'tempo_medio': sum(tempos) / len(tempos),
-            'tempo_minimo': min(tempos),
-            'tempo_maximo': max(tempos),
-            'media_sucessos': sum(sucessos) / len(sucessos),
-            'media_falhas': sum(falhas) / len(falhas),
-            'ultima_operacao': self.historico_performance[-1]['timestamp']
-        }
-    
-    def limpar_historico(self):
-        """Limpa o histórico de performance"""
-        self.historico_performance.clear()
-        self.alertas.clear()
-        self.problemas_recorrentes.clear()
-        
-        emoji = "🧹" if self.usar_emojis else ""
-        self.logger.info(f"{emoji} Histórico de monitoramento limpo")
 
 
 class DescompactadorCaged:
@@ -373,10 +322,6 @@ class DescompactadorCaged:
         self.metadados_arquivos: Dict[str, Dict] = {}
         self.usar_emojis = usar_emojis
         
-        # Cache de metadados persistente
-        self.cache_metadados = {}
-        self.arquivo_cache = self.diretorio_destino / ".cache_metadados.json"
-        
         # Criar diretório de destino se não existir
         self.diretorio_destino.mkdir(parents=True, exist_ok=True)
         
@@ -385,9 +330,6 @@ class DescompactadorCaged:
         
         # Inicializar sistema de monitoramento
         self.monitor = MonitorDescompactacao(self.logger, usar_emojis)
-        
-        # Carregar cache de metadados
-        self._carregar_cache_metadados()
     
 
     
@@ -549,9 +491,6 @@ class DescompactadorCaged:
                 self.monitor.registrar_falha(f"Validação falhou para: {arquivo_7z.name}", "validacao_falhou")
             
             self.metadados_arquivos[arquivo_7z.name] = metadados
-            
-            # Salvar metadados no cache persistente
-            self._salvar_metadados_cache(arquivo_7z, metadados)
             
             return True, metadados
             
@@ -2397,8 +2336,6 @@ class DescompactadorCaged:
     
     def limpar_arquivos_temporarios(self, ano: Optional[int] = None):
         """
-        Remove arquivos temporários e de cache
-        
         Args:
             ano: Ano específico ou None para todos
         """
@@ -2947,176 +2884,6 @@ class DescompactadorCaged:
             self.logger.error(f"❌ Erro ao criar indicadores para {competencia}: {e}")
         
         return indicadores
-    
-    def _carregar_cache_metadados(self) -> None:
-        """
-        Carrega cache de metadados do arquivo persistente
-        """
-        try:
-            if self.arquivo_cache.exists():
-                import json
-                with open(self.arquivo_cache, 'r', encoding='utf-8') as f:
-                    self.cache_metadados = json.load(f)
-                self.logger.info(f"📋 Cache de metadados carregado: {len(self.cache_metadados)} entradas")
-            else:
-                self.cache_metadados = {}
-                self.logger.info("📋 Cache de metadados inicializado (vazio)")
-        except Exception as e:
-            self.logger.warning(f"⚠️  Erro ao carregar cache de metadados: {e}")
-            self.cache_metadados = {}
-    
-    def _salvar_cache_metadados(self) -> None:
-        """
-        Salva cache de metadados no arquivo persistente
-        """
-        try:
-            import json
-            with open(self.arquivo_cache, 'w', encoding='utf-8') as f:
-                json.dump(self.cache_metadados, f, indent=2, ensure_ascii=False)
-            self.logger.debug(f"💾 Cache de metadados salvo: {len(self.cache_metadados)} entradas")
-        except Exception as e:
-            self.logger.error(f"❌ Erro ao salvar cache de metadados: {e}")
-    
-    def _obter_metadados_cache(self, arquivo_7z: Path) -> Optional[Dict]:
-        """
-        Obtém metadados do cache se disponível e válido
-        
-        Args:
-            arquivo_7z: Caminho do arquivo .7z
-            
-        Returns:
-            Metadados do cache ou None se não disponível/inválido
-        """
-        try:
-            chave_cache = str(arquivo_7z.absolute())
-            
-            if chave_cache not in self.cache_metadados:
-                return None
-            
-            metadados_cache = self.cache_metadados[chave_cache]
-            
-            # Verificar se o arquivo foi modificado desde o cache
-            timestamp_arquivo = arquivo_7z.stat().st_mtime
-            timestamp_cache = metadados_cache.get('timestamp_cache', 0)
-            
-            if timestamp_arquivo > timestamp_cache:
-                # Arquivo foi modificado, cache inválido
-                del self.cache_metadados[chave_cache]
-                return None
-            
-            self.logger.debug(f"📋 Metadados obtidos do cache: {arquivo_7z.name}")
-            return metadados_cache
-            
-        except Exception as e:
-            self.logger.debug(f"⚠️  Erro ao obter metadados do cache: {e}")
-            return None
-    
-    def _salvar_metadados_cache(self, arquivo_7z: Path, metadados: Dict) -> None:
-        """
-        Salva metadados no cache
-        
-        Args:
-            arquivo_7z: Caminho do arquivo .7z
-            metadados: Metadados a serem salvos
-        """
-        try:
-            chave_cache = str(arquivo_7z.absolute())
-            
-            # Adicionar timestamp do cache
-            metadados_cache = metadados.copy()
-            metadados_cache['timestamp_cache'] = arquivo_7z.stat().st_mtime
-            metadados_cache['timestamp_salvamento'] = datetime.now().isoformat()
-            
-            self.cache_metadados[chave_cache] = metadados_cache
-            
-            # Salvar cache periodicamente (a cada 10 entradas)
-            if len(self.cache_metadados) % 10 == 0:
-                self._salvar_cache_metadados()
-            
-            self.logger.debug(f"💾 Metadados salvos no cache: {arquivo_7z.name}")
-            
-        except Exception as e:
-            self.logger.debug(f"⚠️  Erro ao salvar metadados no cache: {e}")
-    
-    def limpar_cache_metadados(self, forcar: bool = False) -> None:
-        """
-        Limpa cache de metadados
-        
-        Args:
-            forcar: Se deve forçar limpeza mesmo com entradas válidas
-        """
-        try:
-            if forcar:
-                self.cache_metadados.clear()
-                if self.arquivo_cache.exists():
-                    self.arquivo_cache.unlink()
-                self.logger.info("🧹 Cache de metadados limpo completamente")
-            else:
-                # Limpar apenas entradas inválidas
-                chaves_invalidas = []
-                
-                for chave, metadados in self.cache_metadados.items():
-                    arquivo_path = Path(chave)
-                    if not arquivo_path.exists():
-                        chaves_invalidas.append(chave)
-                
-                for chave in chaves_invalidas:
-                    del self.cache_metadados[chave]
-                
-                if chaves_invalidas:
-                    self._salvar_cache_metadados()
-                    self.logger.info(f"🧹 {len(chaves_invalidas)} entradas inválidas removidas do cache")
-                else:
-                    self.logger.info("✅ Cache de metadados já está limpo")
-                    
-        except Exception as e:
-            self.logger.error(f"❌ Erro ao limpar cache de metadados: {e}")
-    
-    def estatisticas_cache_metadados(self) -> Dict:
-        """
-        Retorna estatísticas do cache de metadados
-        
-        Returns:
-            Dicionário com estatísticas do cache
-        """
-        try:
-            total_entradas = len(self.cache_metadados)
-            
-            if total_entradas == 0:
-                return {
-                    "total_entradas": 0,
-                    "tamanho_arquivo_cache": 0,
-                    "entradas_validas": 0,
-                    "entradas_invalidas": 0
-                }
-            
-            # Verificar entradas válidas
-            entradas_validas = 0
-            entradas_invalidas = 0
-            
-            for chave in self.cache_metadados.keys():
-                arquivo_path = Path(chave)
-                if arquivo_path.exists():
-                    entradas_validas += 1
-                else:
-                    entradas_invalidas += 1
-            
-            # Tamanho do arquivo de cache
-            tamanho_cache = 0
-            if self.arquivo_cache.exists():
-                tamanho_cache = self.arquivo_cache.stat().st_size
-            
-            return {
-                "total_entradas": total_entradas,
-                "entradas_validas": entradas_validas,
-                "entradas_invalidas": entradas_invalidas,
-                "tamanho_arquivo_cache": tamanho_cache,
-                "arquivo_cache": str(self.arquivo_cache)
-            }
-            
-        except Exception as e:
-            self.logger.error(f"❌ Erro ao obter estatísticas do cache: {e}")
-            return {"erro": str(e)}
 
 
 # Função auxiliar para teste
