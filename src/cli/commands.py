@@ -15,7 +15,7 @@ from typing import List, Optional
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from ..core.config import ConfigManager
-from ..core.pipeline import CAGEDPipeline, ProcessingStage, create_pipeline
+from ..core.pipeline import CAGEDPipeline, ProcessingStage
 from ..core.exceptions import CAGEDException, ValidationError
 from ..core.recovery import (
     RecoveryManager, OperationType, OperationStatus,
@@ -211,8 +211,12 @@ def processar(ctx, ano, mes, ano_inicio, mes_inicio, ano_fim, mes_fim, todos_mes
         # Determinar etapas de processamento
         stages = _determine_processing_stages(
             download, extract, convert,
-            skip_download, skip_extract, skip_convert, limpar_arquivos
+            skip_download, skip_extract, skip_convert
         )
+
+        if limpar_arquivos:
+            if ProcessingStage.CLEANUP not in stages:
+                stages.append(ProcessingStage.CLEANUP)
         
 
         
@@ -223,26 +227,37 @@ def processar(ctx, ano, mes, ano_inicio, mes_inicio, ano_fim, mes_fim, todos_mes
             else:
                 click.echo(f"   {_get_stage_emoji(stage)} {_get_stage_name(stage)}: ⏭️")
         
-        # Determinar modo de processamento
-        if todos_meses:
-            if not ano:
-                raise ValidationError("Ano é obrigatório quando --todos-meses é usado")
-            click.echo(f"📅 Modo: Todos os meses ({ano})")
-            items = _create_year_items(ano, stages)
-        elif ano_inicio and mes_inicio and ano_fim and mes_fim:
-            click.echo(f"📅 Modo: Faixa de datas ({mes_inicio:02d}/{ano_inicio} - {mes_fim:02d}/{ano_fim})")
-            items = _create_range_items(ano_inicio, mes_inicio, ano_fim, mes_fim, stages)
-        elif ano and mes:
-            click.echo(f"📅 Modo: Mensal ({mes:02d}/{ano})")
-            items = _create_single_item(ano, mes, stages)
-        elif ano and not mes:
-            # Se apenas ano for fornecido, processar todos os meses
-            click.echo(f"📅 Modo: Todos os meses ({ano}) - mês não especificado")
-            items = _create_year_items(ano, stages)
-        else:
-            raise ValidationError(
-                "Especifique: --ano (processa todos os meses), --ano e --mes (mês específico), ou faixa com --ano-inicio/mes-inicio/ano-fim/mes-fim"
+        # Validar e obter a lista de meses a processar
+        try:
+            meses_a_processar = CAGEDValidator.validar_e_obter_meses(
+                ano=ano, mes=mes,
+                ano_inicio=ano_inicio, mes_inicio=mes_inicio,
+                ano_fim=ano_fim, mes_fim=mes_fim,
+                todos_meses=todos_meses
             )
+        except ValidationError as e:
+            logger.error(f"Erro de validação: {e}")
+            sys.exit(1)
+
+        if not meses_a_processar:
+            logger.warning("Nenhum mês a processar com os parâmetros fornecidos.")
+            return
+
+        # Criar pipeline
+        pipeline = CAGEDPipeline(config)
+
+        # Criar itens de processamento com base nos diretórios remotos
+        anos_unicos = sorted(list(set(a for a, m in meses_a_processar)))
+        meses_por_ano = {y: [m for a, m in meses_a_processar if a == y] for y in anos_unicos}
+
+        items = []
+        for ano_proc in anos_unicos:
+            meses_para_ano = meses_por_ano[ano_proc]
+            items.extend(pipeline.create_items_for_year(ano_proc, meses_para_ano, stages))
+
+        if not items:
+            logger.warning("Nenhum item de processamento criado. Verifique a disponibilidade dos dados.")
+            return
         
         # Executar validações centralizadas
         _execute_validations(items, stages, config, logger)
@@ -270,8 +285,7 @@ def processar(ctx, ano, mes, ano_inicio, mes_inicio, ano_fim, mes_fim, todos_mes
             click.echo("\n💡 Execute sem --dry-run para processar os dados")
             return
         
-        # Criar e executar pipeline
-        pipeline = create_pipeline(config)
+        # O pipeline já foi instanciado anteriormente
         
         # Registrar handlers (implementação futura)
         # _register_pipeline_handlers(pipeline, config)
@@ -687,7 +701,7 @@ def config_set(ctx, profile, section, key, value):
 
 
 def _determine_processing_stages(download, extract, convert,
-                               skip_download, skip_extract, skip_convert, limpar_arquivos) -> List[ProcessingStage]:
+                               skip_download, skip_extract, skip_convert) -> List[ProcessingStage]:
     """Determina quais estágios executar baseado nos flags"""
     stages = []
     
@@ -717,56 +731,38 @@ def _determine_processing_stages(download, extract, convert,
         if not skip_convert:
             stages.append(ProcessingStage.CONVERT)
 
-    if limpar_arquivos:
-        stages.append(ProcessingStage.CLEANUP)
+
     
     return stages
 
 
-def _create_single_item(ano: int, mes: int, stages: List[ProcessingStage]):
-    """Cria item único de processamento"""
-    pipeline = create_pipeline()
-    return [pipeline.create_processing_item(ano, mes, stages)]
 
-
-def _create_year_items(ano: int, stages: List[ProcessingStage]):
-    """Cria itens para todos os meses do ano"""
-    pipeline = create_pipeline()
-    return pipeline.create_date_range_items(ano, 1, ano, 12, stages)
-
-
-def _create_range_items(ano_inicio: int, mes_inicio: int, ano_fim: int, mes_fim: int, stages: List[ProcessingStage]):
-    """Cria itens para faixa de datas"""
-    pipeline = create_pipeline()
-    return pipeline.create_date_range_items(ano_inicio, mes_inicio, ano_fim, mes_fim, stages)
 
 
 def _execute_validations(items, stages, config, logger):
     """Executa validações centralizadas"""
-    validator = CAGEDValidator()
-    
     # Validar cada item
     for item in items:
         # Validar ano/mês
-        validator.validar_ano_mes(item.ano, item.mes)
+        CAGEDValidator.validar_ano_mes(item.ano, item.mes)
     
     # Validar faixa se múltiplos itens
     if len(items) > 1:
         first_item = items[0]
         last_item = items[-1]
-        validator.validar_faixa_datas(
+        CAGEDValidator.validar_faixa_datas(
             first_item.ano, first_item.mes,
             last_item.ano, last_item.mes
         )
     
     # Validar espaço em disco
-    validator.validar_espaco_disco()
+    CAGEDValidator.validar_espaco_disco()
     
     # Validar conectividade FTP se download estiver habilitado
     if ProcessingStage.DOWNLOAD in stages:
         click.echo("🔍 Validando conectividade FTP...")
         try:
-            validator.validar_conectividade_ftp()
+            CAGEDValidator.validar_conectividade_ftp()
             click.echo(f"✅ Conectividade FTP OK: {config.ftp.server}")
         except Exception as e:
             logger.warning(f"Falha na conectividade FTP: {e}")

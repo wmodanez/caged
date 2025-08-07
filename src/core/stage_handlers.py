@@ -85,15 +85,7 @@ class DownloadStageHandler(PipelineStageHandler):
     
     def __init__(self, config: CAGEDConfig, logger: logging.Logger):
         super().__init__(config, logger)
-        self.ftp_config = config.ftp
-        # Inicializar serviço FTP real
-        ftp_config = FTPConfig.from_config({
-            'server': self.ftp_config.server,
-            'directory': self.ftp_config.directory,
-            'timeout': self.ftp_config.timeout,
-            'max_retries': self.ftp_config.max_retries
-        })
-        self.ftp_service = FTPService(ftp_config)
+        self.ftp_service = FTPService(config)
     
     async def process(self, item: ProcessingItem) -> ProcessingResult:
         """Processa download de arquivos"""
@@ -108,7 +100,7 @@ class DownloadStageHandler(PipelineStageHandler):
             dest_dir = Path(f"./files-zip/{item.ano}/{item.ano}{item.mes:02d}")
 
             # Verificar se o diretório remoto existe antes de tentar o download
-            remote_base_path = self.ftp_config.directory
+            remote_base_path = self.config.ftp.directory
             year_dirs = await asyncio.get_event_loop().run_in_executor(None, self.ftp_service.list_remote_dirs, remote_base_path)
             if str(item.ano) not in year_dirs:
                 raise FileNotFoundError(f"Diretório do ano {item.ano} não encontrado no FTP.")

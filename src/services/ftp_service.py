@@ -37,16 +37,16 @@ class FTPConfig:
     retry_attempts: int = 3
     
     @classmethod
-    def from_config(cls, config_dict: dict) -> 'FTPConfig':
-        """Cria configuração a partir de dicionário"""
+    def from_config(cls, config: 'CAGEDConfig') -> 'FTPConfig':
+        """Cria configuração a partir do objeto de configuração principal"""
         return cls(
-            host=config_dict.get('server', 'ftp.mtps.gov.br'),
+            host=config.ftp.server,
             port=21,
             username='anonymous',
             password='user@example.com',
-            base_path=config_dict.get('directory', '/pdet/microdados/NOVO CAGED/'),
-            timeout=config_dict.get('timeout', 60),  # Aumentado para 60 segundos
-            retry_attempts=config_dict.get('max_retries', 3)
+            base_path=config.ftp.directory,
+            timeout=config.ftp.timeout,
+            retry_attempts=config.ftp.max_retries
         )
 
 
@@ -142,14 +142,14 @@ class FTPService:
     - Suporte a retry automático
     """
     
-    def __init__(self, config: FTPConfig):
+    def __init__(self, config: 'CAGEDConfig'):
         """
         Inicializa o serviço FTP
         
         Args:
-            config: Configuração FTP
+            config: Configuração principal do CAGED
         """
-        self.config = config
+        self.config = FTPConfig.from_config(config)
         self.ftp_conn: Optional[ftplib.FTP] = None
         self._is_connected = False
         self._current_directory = None
@@ -198,15 +198,50 @@ class FTPService:
         """
         ftp = self._connect_and_login()
         if not ftp:
-            raise FTPConnectionError("Não foi possível estabelecer conexão FTP.")
+            raise FTPConnectionError("Não foi possível estabelecer conexão com o servidor FTP.")
+        
         try:
             yield ftp
         finally:
             if ftp:
                 try:
                     ftp.quit()
-                except:  # noqa
-                    pass
+                except Exception as e:
+                    logger.warning(f"⚠️ Erro ao fechar conexão FTP: {e}")
+
+    @retry_on_ftp_error(max_retries=3, delay=2.0)
+    def list_remote_directories(self, year: int) -> List[int]:
+        """
+        Lista os diretórios remotos para um determinado ano e retorna os meses.
+
+        Args:
+            year: O ano para o qual listar os diretórios.
+
+        Returns:
+            Uma lista de inteiros representando os meses.
+        """
+        path = f"{self.config.base_path}/{year}"
+        
+        with self._get_ftp_connection() as ftp:
+            try:
+                ftp.cwd(path)
+                dir_names = ftp.nlst()
+                # Extrai o mês do nome do diretório (ex: '202401' -> 1)
+                months = []
+                for name in dir_names:
+                    if name.isdigit() and len(name) == 6 and name.startswith(str(year)):
+                        try:
+                            month = int(name[4:])
+                            if 1 <= month <= 12:
+                                months.append(month)
+                        except ValueError:
+                            continue
+                return sorted(months)
+            except ftplib.error_perm as e:
+                if '550' in str(e):
+                    logger.warning(f"Diretório para o ano {year} não encontrado: {e}")
+                    return []
+                raise e
 
     @retry_on_ftp_error(max_retries=3, delay=3.0)
     def download_file(self, ano: int, mes: int, dest_path: Path) -> bool:

@@ -255,6 +255,42 @@ class CAGEDPipeline:
         
         return results
     
+    def create_items_for_year(self, year: int, months: List[int], 
+                                stages: List[ProcessingStage]) -> List[ProcessingItem]:
+        """Cria itens de processamento para um ano e meses específicos"""
+        items = []
+        
+        # Se a lista de meses estiver vazia, busca os meses disponíveis no FTP
+        if not months:
+            try:
+                from ..services.ftp_service import FTPService
+                ftp_service = FTPService(self.config)
+                
+                available_months = ftp_service.list_remote_directories(year)
+                
+                if not available_months:
+                    self.logger.warning(f"Nenhum mês encontrado para o ano {year} no FTP.")
+                    return []
+                
+                months = available_months
+                    
+            except Exception as e:
+                self.logger.error(f"Erro ao buscar meses do FTP para o ano {year}: {e}")
+                raise PipelineError(f"Não foi possível obter a lista de meses para {year}")
+
+        for month in months:
+            item_id = f"caged_{year}_{month:02d}"
+            item = ProcessingItem(
+                id=item_id,
+                ano=year,
+                mes=month,
+                stages=stages
+            )
+            items.append(item)
+            
+        self.logger.info(f"{len(items)} itens de processamento criados para o ano {year}")
+        return items
+
     async def _process_single_item(self, item: ProcessingItem) -> ProcessingResult:
         """Processa um único item através de todos os estágios"""
         item.status = ProcessingStatus.RUNNING
@@ -276,7 +312,6 @@ class CAGEDPipeline:
                 
                 handler = self._stage_handlers[stage]
                 
-                # Validar se o handler pode processar o item
                 if not handler.validate_item(item):
                     warning = f"Item {item.id} não pode ser processado pelo handler {stage.value}"
                     self.logger.warning(warning)
@@ -285,17 +320,14 @@ class CAGEDPipeline:
                 
                 self.logger.debug(f"Executando estágio {stage.value} para item {item.id}")
                 
-                # Callback de progresso por estágio
                 if self._progress_callback:
                     stage_progress = item.stages.index(stage) / len(item.stages)
                     self._progress_callback(item, stage, stage_progress)
                 
-                # Processar estágio com métricas
                 stage_start_time = time.time()
                 stage_result = await handler.process(item)
                 stage_duration = time.time() - stage_start_time
                 
-                # Registrar métricas do estágio
                 record_operation(
                     stage.value,
                     stage_result.success,
@@ -303,50 +335,46 @@ class CAGEDPipeline:
                     {
                         "item_id": item.id,
                         "files_processed": stage_result.files_processed,
-                        "bytes_processed": stage_result.bytes_processed,
-                        "warnings_count": len(stage_result.warnings)
+                        "bytes_processed": stage_result.bytes_processed
                     }
                 )
                 
-                if not stage_result.success:
-                    all_errors.extend(stage_result.errors)
-                    break
-                
                 total_files += stage_result.files_processed
                 total_bytes += stage_result.bytes_processed
+                all_errors.extend(stage_result.errors)
                 all_warnings.extend(stage_result.warnings)
-            
-            # Determinar sucesso geral
-            success = len(all_errors) == 0
-            
-            if success:
-                item.status = ProcessingStatus.COMPLETED
-                self._stats["completed_items"] += 1
+                
+                if not stage_result.success:
+                    self.logger.error(f"Falha no estágio {stage.value} para item {item.id}")
+                    item.status = ProcessingStatus.FAILED
+                    item.error = f"Falha no estágio {stage.value}"
+                    break
             else:
-                item.status = ProcessingStatus.FAILED
-                self._stats["failed_items"] += 1
-            
+                item.status = ProcessingStatus.COMPLETED
+        
+        except Exception as e:
+            self.logger.error(f"Erro inesperado ao processar item {item.id}: {e}", exc_info=True)
+            item.status = ProcessingStatus.FAILED
+            item.error = str(e)
+            all_errors.append(str(e))
+        
+        finally:
             item.end_time = datetime.now()
             duration = time.time() - item_start_time
             
-            # Registrar métricas do item completo
-            record_operation(
-                "item_processing",
-                success,
-                duration,
-                {
-                    "item_id": item.id,
-                    "stages_count": len(item.stages),
-                    "total_files": total_files,
-                    "total_bytes": total_bytes,
-                    "errors_count": len(all_errors),
-                    "warnings_count": len(all_warnings)
-                }
-            )
-            
-            return ProcessingResult(
+            if ProcessingStage.CLEANUP in item.stages:
+                try:
+                    cleanup_handler = self._stage_handlers.get(ProcessingStage.CLEANUP)
+                    if cleanup_handler:
+                        self.logger.info(f"Executando cleanup para item {item.id}.")
+                        await cleanup_handler.process(item)
+                except Exception as cleanup_error:
+                    self.logger.error(f"Erro durante o cleanup para o item {item.id}: {cleanup_error}")
+                    all_errors.append(f"Erro no cleanup: {cleanup_error}")
+
+            result = ProcessingResult(
                 item=item,
-                success=success,
+                success=item.status == ProcessingStatus.COMPLETED,
                 duration=duration,
                 files_processed=total_files,
                 bytes_processed=total_bytes,
@@ -354,34 +382,12 @@ class CAGEDPipeline:
                 warnings=all_warnings
             )
             
-        except Exception as e:
-            item.status = ProcessingStatus.FAILED
-            item.end_time = datetime.now()
-            self._stats["failed_items"] += 1
+            if result.success:
+                self._stats["completed_items"] += 1
+            else:
+                self._stats["failed_items"] += 1
             
-            error_msg = f"Erro inesperado no processamento: {e}"
-            self.logger.error(error_msg)
-            
-            duration = time.time() - item_start_time
-            
-            # Registrar métricas de erro
-            record_operation(
-                "item_processing",
-                False,
-                duration,
-                {
-                    "item_id": item.id,
-                    "error": error_msg,
-                    "exception_type": type(e).__name__
-                }
-            )
-            
-            return ProcessingResult(
-                item=item,
-                success=False,
-                duration=duration,
-                errors=[error_msg]
-            )
+            return result
     
     def _log_final_stats(self, results: List[ProcessingResult]):
         """Log das estatísticas finais"""
@@ -857,19 +863,6 @@ class ParallelPipeline(CAGEDPipeline):
 
 
 # Funções utilitárias para criar pipelines
-def create_pipeline(config: Optional[CAGEDConfig] = None) -> CAGEDPipeline:
-    """Cria instância do pipeline básico com handlers registrados"""
-    pipeline = CAGEDPipeline(config)
-    
-    # Registrar handlers de estágio
-    from src.core.stage_handlers import create_stage_handlers
-    handlers = create_stage_handlers(pipeline.config)
-    
-    for stage, handler in handlers.items():
-        pipeline.register_stage_handler(stage, handler)
-    
-    return pipeline
-
 
 def create_parallel_pipeline(config: Optional[CAGEDConfig] = None) -> ParallelPipeline:
     """Cria instância do pipeline paralelo avançado com handlers registrados"""

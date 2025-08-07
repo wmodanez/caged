@@ -18,6 +18,7 @@ from typing import Tuple, Optional, List
 from pathlib import Path
 
 from .logger import setup_logger
+from .exceptions import ValidationError
 
 # Configurar logger
 logger = setup_logger("validators", "INFO")
@@ -348,6 +349,64 @@ class SystemValidator:
 # ============================================================================
 
 class CAGEDValidator:
+    @staticmethod
+    def validar_e_obter_meses(
+        ano: Optional[int] = None,
+        mes: Optional[int] = None,
+        ano_inicio: Optional[int] = None,
+        mes_inicio: Optional[int] = None,
+        ano_fim: Optional[int] = None,
+        mes_fim: Optional[int] = None,
+        todos_meses: bool = False
+    ) -> List[Tuple[int, int]]:
+        """
+        Valida os parâmetros de entrada e retorna a lista de meses a processar.
+
+        Raises:
+            ValidationError: Se os parâmetros forem inválidos.
+
+        Returns:
+            Lista de tuplas (ano, mes).
+        """
+        # Modo 1: Ano específico
+        if ano and not mes and not todos_meses and not any([ano_inicio, mes_inicio, ano_fim, mes_fim]):
+            valido, msg = DateValidator.validate_year_month(ano)
+            if not valido:
+                raise ValidationError(msg)
+            return [(ano, m) for m in range(1, 13)]
+
+        # Modo 2: Mês específico
+        if ano and mes and not todos_meses:
+            valido, msg = DateValidator.validate_year_month(ano, mes)
+            if not valido:
+                raise ValidationError(msg)
+            valido, msg = DateValidator.validate_current_period(ano, mes)
+            if not valido:
+                raise ValidationError(msg)
+            return [(ano, mes)]
+
+        # Modo 3: Faixa de datas
+        if ano_inicio and mes_inicio and ano_fim and mes_fim:
+            valido, msg = DateValidator.validate_date_range(ano_inicio, mes_inicio, ano_fim, mes_fim)
+            if not valido:
+                raise ValidationError(msg)
+            
+            meses = []
+            for a in range(ano_inicio, ano_fim + 1):
+                start_mes = mes_inicio if a == ano_inicio else 1
+                end_mes = mes_fim if a == ano_fim else 12
+                for m in range(start_mes, end_mes + 1):
+                    meses.append((a, m))
+            return meses
+
+        # Modo 4: Todos os meses de um ano
+        if ano and todos_meses:
+            valido, msg = DateValidator.validate_year_month(ano)
+            if not valido:
+                raise ValidationError(msg)
+            return [(ano, m) for m in range(1, 13)]
+
+        raise ValidationError("Combinação de parâmetros inválida. Use --help para ver as opções.")
     """
     Classe principal que agrupa todos os validadores
     Mantém compatibilidade com ValidadorCaged do main.py
