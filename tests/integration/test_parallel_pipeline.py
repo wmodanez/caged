@@ -19,7 +19,7 @@ sys.path.append(str(Path(__file__).parent.parent / "src"))
 # Configurar pytest-asyncio
 pytest_plugins = ('pytest_asyncio',)
 
-from core.pipeline import (
+from src.core.pipeline import (
     ParallelPipeline,
     ResourceMonitor,
     ConnectionPool,
@@ -28,8 +28,8 @@ from core.pipeline import (
     ProcessingResult,
     ProcessingStatus
 )
-from core.config import CAGEDConfig, ProcessingConfig
-from core.exceptions import PipelineError
+from src.core.config import CAGEDConfig, ProcessingConfig
+from src.core.exceptions import PipelineError
 
 
 class TestResourceMonitor:

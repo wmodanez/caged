@@ -37,7 +37,7 @@ class FTPConfig:
     retry_attempts: int = 3
     
     @classmethod
-    def from_config(cls, config: 'CAGEDConfig') -> 'FTPConfig':
+    def from_config(cls, config: Dict) -> 'FTPConfig':
         """Cria configuração a partir do objeto de configuração principal"""
         return cls(
             host=config.ftp.server,
@@ -142,7 +142,7 @@ class FTPService:
     - Suporte a retry automático
     """
     
-    def __init__(self, config: 'CAGEDConfig'):
+    def __init__(self, config: Dict):
         """
         Inicializa o serviço FTP
         

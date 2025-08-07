@@ -613,9 +613,7 @@ class ParallelPipeline(CAGEDPipeline):
             'throttle_events': 0,
             'resource_checks': 0,
             'avg_task_duration': 0.0,
-            'peak_workers': 0,
-            'cache_hits': 0,
-            'cache_misses': 0
+            'peak_workers': 0
         }
     
     def set_connection_pool(self, pool: ConnectionPool):
@@ -731,25 +729,8 @@ class ParallelPipeline(CAGEDPipeline):
             start_time = time.time()
             
             try:
-                # Verificar cache primeiro
-                cache_key = f"item_{item.id}_{hash(tuple(item.stages))}"
-                
-                if cache_manager.has_cached_item(cache_key):
-                    self.logger.debug(f"💾 Cache hit para item {item.id}")
-                    self._parallel_stats['cache_hits'] += 1
-                    
-                    cached_result = cache_manager.get_cached_item(cache_key)
-                    if cached_result:
-                        return cached_result
-                
-                self._parallel_stats['cache_misses'] += 1
-                
                 # Processar item normalmente
                 result = await self._process_single_item(item)
-                
-                # Cachear resultado se bem-sucedido
-                if result.success:
-                    cache_manager.cache_item(cache_key, result, category="results")
                 
                 return result
                 
@@ -843,12 +824,8 @@ class ParallelPipeline(CAGEDPipeline):
         self.logger.info(f"⚡ Workers pico: {stats['peak_workers']}")
         self.logger.info(f"🐌 Eventos throttle: {stats['throttle_events']}")
         self.logger.info(f"🔍 Verificações recursos: {stats['resource_checks']}")
-        self.logger.info(f"💾 Cache hits: {stats['cache_hits']}")
-        self.logger.info(f"💿 Cache misses: {stats['cache_misses']}")
         
         if stats['completed_tasks'] > 0:
-            cache_hit_rate = (stats['cache_hits'] / (stats['cache_hits'] + stats['cache_misses'])) * 100
-            self.logger.info(f"📈 Taxa cache hit: {cache_hit_rate:.1f}%")
             self.logger.info(f"⏱️ Duração média task: {stats['avg_task_duration']:.2f}s")
         
         # Log de recursos finais

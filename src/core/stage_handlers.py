@@ -150,7 +150,7 @@ class DownloadStageHandler(PipelineStageHandler):
             )
             
             if not download_result:
-                raise Exception(f"Falha no download do arquivo {filename}")
+                raise Exception("Falha no download do arquivo")
             
             # Obter tamanho total dos arquivos baixados
             total_size = sum(f.stat().st_size for f in dest_dir.glob('*.7z') if f.is_file())
