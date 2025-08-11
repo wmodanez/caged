@@ -48,6 +48,15 @@ class OutputConfig:
 
 
 @dataclass
+class StorageConfig:
+    """Configurações de Armazenamento"""
+    raw_dir: str = "files-raw"
+    parquet_dir: str = "files-parquet"
+    temp_dir: str = "temp"
+    consolidated_dir: str = "files-consolidated"
+
+
+@dataclass
 class LoggingConfig:
     """Configurações de Logging"""
     level: str = "INFO"
@@ -63,6 +72,7 @@ class LoggingConfig:
 @dataclass
 class CAGEDConfig:
     """Configuração principal do sistema CAGED"""
+    storage: StorageConfig = field(default_factory=StorageConfig)
     ftp: FTPConfig = field(default_factory=FTPConfig)
     processing: ProcessingConfig = field(default_factory=ProcessingConfig)
     output: OutputConfig = field(default_factory=OutputConfig)

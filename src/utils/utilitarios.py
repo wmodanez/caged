@@ -5,14 +5,12 @@ from typing import List, Dict, Any
 import logging
 from contextlib import contextmanager
 
-# Importação do sistema de logging centralizado
-from src.utils.logger import LoggerConfig, setup_logger, log_structured
 import logging
 import shutil
 from pathlib import Path
 
-# Usar o logger centralizado configurado no main.py
-logger = logging.getLogger("caged")
+# Usar o logger padrão
+logger = logging.getLogger(__name__)
 
 
 
@@ -246,55 +244,93 @@ def padronizar_nome_coluna(nome_coluna: str) -> str:
 def padronizar_nome_coluna_caged(nome_coluna: str) -> str:
     """
     Padroniza nomes de colunas do CAGED, incluindo casos especiais e melhorias de legibilidade.
+    Baseado no layout oficial do Novo CAGED.
     """
     nome_padronizado = padronizar_nome_coluna(nome_coluna)
     palavras_para_remover = ['DE', 'DO', 'DA', 'DOS', 'DAS', 'E', 'EM', 'COM', 'PARA', 'POR']
     palavras = nome_padronizado.split('_')
     palavras_filtradas = [p for p in palavras if p not in palavras_para_remover]
     nome_final = '_'.join(palavras_filtradas)
-    # Casos especiais
-    if 'GRAUINSTRUCAO' in nome_final or 'GRAUDEINSTRUCAO' in nome_final:
-        nome_final = 'GRAU_INSTRUCAO'
-    if 'SALDOMOVIMENTACAO' in nome_final:
-        nome_final = 'SALDO_MOVIMENTACAO'
+    
+    # Casos especiais baseados no layout oficial do CAGED
+    # Campos temporais
     if 'COMPETENCIAMOV' in nome_final:
         nome_final = 'COMPETENCIA_MOV'
+    if 'COMPETENCIAEXC' in nome_final:
+        nome_final = 'COMPETENCIA_EXC'
+    if 'COMPETENCIADEC' in nome_final:
+        nome_final = 'COMPETENCIA_DEC'
+    
+    # Localização geográfica
+    if 'REGIAO' in nome_final:
+        nome_final = 'REGIAO'
+    if 'MUNICIPIO' in nome_final:
+        nome_final = 'MUNICIPIO'
+    
+    # Atividade econômica
+    if 'SECAO' in nome_final:
+        nome_final = 'SECAO'
+    if 'SUBCLASSE' in nome_final:
+        nome_final = 'SUBCLASSE'
+    
+    # Movimentação
+    if 'SALDOMOVIMENTACAO' in nome_final:
+        nome_final = 'SALDO_MOVIMENTACAO'
+    if 'TIPOMOVIMENTACAO' in nome_final:
+        nome_final = 'TIPO_MOVIMENTACAO'
+    
+    # Características do trabalhador
+    if 'CATEGORIA' in nome_final:
+        nome_final = 'CATEGORIA'
     if 'CBO2002OCUPACAO' in nome_final:
         nome_final = 'CBO2002_OCUPACAO'
-    if 'TIPODEDEFICIENCIA' in nome_final or 'TIPODEFICIENCIA' in nome_final or 'TIPO_DEFICIENCIA' in nome_final:
-        nome_final = 'TIPO_DEFICIENCIA'
+    if 'GRAUINSTRUCAO' in nome_final or 'GRAUDEINSTRUCAO' in nome_final:
+        nome_final = 'GRAU_INSTRUCAO'
+    if 'IDADE' in nome_final:
+        nome_final = 'IDADE'
     if 'HORASCONTRATUAIS' in nome_final:
         nome_final = 'HORAS_CONTRATUAIS'
     if 'RACACOR' in nome_final:
         nome_final = 'RACA_COR'
+    if 'SEXO' in nome_final:
+        nome_final = 'SEXO'
+    
+    # Características do empregador/estabelecimento
+    if 'CNPJRAIZ' in nome_final or 'CNPJ_RAIZ' in nome_final:
+        nome_final = 'CNPJ_RAIZ'
     if 'TIPOEMPREGADOR' in nome_final:
         nome_final = 'TIPO_EMPREGADOR'
     if 'TIPOESTABELECIMENTO' in nome_final:
         nome_final = 'TIPO_ESTABELECIMENTO'
-    if 'TIPOMOVIMENTACAO' in nome_final:
-        nome_final = 'TIPO_MOVIMENTACAO'
+    if 'TAMESTABJAN' in nome_final:
+        nome_final = 'TAM_ESTAB_JAN'
+    
+    # Indicadores especiais
+    if 'TIPODEDEFICIENCIA' in nome_final or 'TIPODEFICIENCIA' in nome_final or 'TIPO_DEFICIENCIA' in nome_final:
+        nome_final = 'TIPO_DEFICIENCIA'
     if 'INDTRABINTERMITENTE' in nome_final:
         nome_final = 'IND_TRAB_INTERMITENTE'
     if 'INDTRABPARCIAL' in nome_final:
         nome_final = 'IND_TRAB_PARCIAL'
-    if 'TAMESTABJAN' in nome_final:
-        nome_final = 'TAM_ESTAB_JAN'
     if 'INDICADORAPRENDIZ' in nome_final:
         nome_final = 'IND_APRENDIZ'
-    if 'ORIGEMDAINFORMACAO' in nome_final:
-        nome_final = 'ORIGEM_INFORMACAO'
-    if 'COMPETENCIAEXC' in nome_final:
-        nome_final = 'COMPETENCIA_EXC'
     if 'INDICADORDEEXCLUSAO' in nome_final:
         nome_final = 'INDICADOR_EXCLUSAO'
-    if 'COMPETENCIADEC' in nome_final:
-        nome_final = 'COMPETENCIA_DEC'
     if 'INDICADORDEFORADOPRAZO' in nome_final:
         nome_final = 'INDICADOR_FORA_PRAZO'
+    
+    # Informações salariais
+    if 'SALARIO' in nome_final and 'CODIGO' not in nome_final and 'FIXO' not in nome_final:
+        nome_final = 'SALARIO'
     if 'UNIDADESALARIOCODIGO' in nome_final:
         nome_final = 'UNIDADE_SALARIO_CODIGO'
     if 'VALORSALARIOFIXO' in nome_final:
         nome_final = 'VALOR_SALARIO_FIXO'
+    
+    # Origem e controle
+    if 'ORIGEMDAINFORMACAO' in nome_final:
+        nome_final = 'ORIGEM_INFORMACAO'
+    
     logger.debug(f"Coluna padronizada (CAGED): '{nome_coluna}' -> '{nome_final}'")
     return nome_final
 
@@ -312,18 +348,48 @@ def padronizar_colunas_dataframe(df_colunas: List[str], usar_versao_melhorada: b
         else:
             nome_padronizado = padronizar_nome_coluna(coluna)
         mapeamento[coluna] = nome_padronizado
+    
+    # Resolver duplicatas de forma mais robusta
+    mapeamento = resolver_colunas_duplicadas(mapeamento)
+    
+    logger.info(f"Padronização concluída: {len(mapeamento)} colunas processadas")
+    return mapeamento
+
+
+def resolver_colunas_duplicadas(mapeamento: Dict[str, str]) -> Dict[str, str]:
+    """
+    Resolve colunas duplicadas após padronização adicionando sufixos únicos.
+    
+    Args:
+        mapeamento: Mapeamento original com possíveis duplicatas
+        
+    Returns:
+        Mapeamento com duplicatas resolvidas
+    """
     nomes_padronizados = list(mapeamento.values())
     duplicados = set([nome for nome in nomes_padronizados if nomes_padronizados.count(nome) > 1])
+    
     if duplicados:
-        logger.warning(f"Colunas duplicadas após padronização: {duplicados}")
+        logger.warning(f"Colunas duplicadas detectadas: {duplicados}")
         contadores = {}
+        mapeamento_corrigido = {}
+        
         for coluna_original, nome_padronizado in mapeamento.items():
             if nome_padronizado in duplicados:
                 contadores[nome_padronizado] = contadores.get(nome_padronizado, 0) + 1
-                if contadores[nome_padronizado] > 1:
-                    mapeamento[coluna_original] = f"{nome_padronizado}_{contadores[nome_padronizado]}"
-                    logger.info(f"Coluna renomeada para evitar duplicação: '{coluna_original}' -> '{mapeamento[coluna_original]}'")
-    logger.info(f"Padronização concluída: {len(mapeamento)} colunas processadas")
+                if contadores[nome_padronizado] == 1:
+                    # Primeira ocorrência mantém o nome original
+                    mapeamento_corrigido[coluna_original] = nome_padronizado
+                else:
+                    # Ocorrências subsequentes recebem sufixo
+                    novo_nome = f"{nome_padronizado}_{contadores[nome_padronizado]}"
+                    mapeamento_corrigido[coluna_original] = novo_nome
+                    logger.info(f"Coluna renomeada para evitar duplicação: '{coluna_original}' -> '{novo_nome}'")
+            else:
+                mapeamento_corrigido[coluna_original] = nome_padronizado
+        
+        return mapeamento_corrigido
+    
     return mapeamento
 
 
@@ -407,7 +473,7 @@ def obter_colunas_invalidas(colunas: List[str]) -> List[str]:
 def validar_campos_caged(df_colunas: List[str]) -> Dict[str, Any]:
     """
     Valida se as colunas essenciais do CAGED estão presentes.
-    Função específica para validação de arquivos CAGED.
+    Versão expandida com mais flexibilidade para variações de nomes.
     
     Args:
         df_colunas: Lista de colunas do DataFrame
@@ -415,36 +481,86 @@ def validar_campos_caged(df_colunas: List[str]) -> Dict[str, Any]:
     Returns:
         Dicionário com resultado da validação
     """
-    # Campos essenciais do CAGED (após padronização)
+    # Campos essenciais com suas possíveis variações
     campos_essenciais = {
-        'COMPETENCIA',
-        'REGIAO',
-        'UF', 
-        'MUNICIPIO',
-        'ADMISSOES',
-        'DESLIGAMENTOS',
-        'SALDO_MOVIMENTACAO'
+        'COMPETENCIA_MOV': [
+            'COMPETENCIA_MOV', 'COMPETENCIA', 'COMPETÊNCIA', 'ANO_MES', 'PERIODO', 'PERÍODO',
+            'DATA_COMPETENCIA', 'MES_ANO', 'COMP', 'ANOCOMP'
+        ],
+        'MUNICIPIO': [
+            'MUNICIPIO', 'MUNICÍPIO', 'COD_MUNICIPIO', 'CODIGO_MUNICIPIO',
+            'IBGE', 'COD_IBGE', 'CODIGO_IBGE', 'MUNIC', 'CD_MUNICIPIO'
+        ],
+        'TIPO_MOVIMENTACAO': [
+            'TIPO_MOVIMENTACAO', 'TIPO_MOVIMENTAÇÃO', 'MOVIMENTACAO', 'MOVIMENTO',
+            'TIPMOV', 'COD_MOVIMENTACAO', 'CODIGO_MOVIMENTACAO', 'MOV', 'TIPOMOV'
+        ],
+        'SALDO_MOVIMENTACAO': [
+            'SALDO_MOVIMENTACAO', 'SALDO_MOVIMENTAÇÃO', 'SALDO', 'VALOR_MOVIMENTACAO',
+            'VL_MOVIMENTACAO', 'SALDOMOV', 'MOVIMENTACAO_VALOR'
+        ]
+    }
+    
+    # Campos opcionais mas importantes
+    campos_opcionais = {
+        'REGIAO': ['REGIAO', 'REGIÃO', 'REGIAO_GEOGRAFICA', 'REG'],
+        'UF': ['UF', 'ESTADO', 'UNIDADE_FEDERACAO', 'SIGLA_UF'],
+        'SECAO': ['SECAO', 'SEÇÃO', 'SECAO_CNAE', 'SEÇÃO_CNAE'],
+        'SUBCLASSE': ['SUBCLASSE', 'SUBCLASSE_CNAE', 'CNAE_SUBCLASSE'],
+        'CATEGORIA': ['CATEGORIA', 'CATEGORIA_TRABALHADOR', 'CAT'],
+        'CBO2002_OCUPACAO': ['CBO2002_OCUPACAO', 'CBO', 'OCUPACAO', 'OCUPAÇÃO'],
+        'IDADE': ['IDADE', 'ID', 'FAIXA_ETARIA', 'FAIXA_ETÁRIA'],
+        'SEXO': ['SEXO', 'GENERO', 'GÊNERO', 'SEX'],
+        'GRAU_INSTRUCAO': ['GRAU_INSTRUCAO', 'GRAU_INSTRUÇÃO', 'ESCOLARIDADE', 'ESC']
     }
     
     # Padronizar colunas recebidas
-    colunas_padronizadas = set(padronizar_nome_coluna(col) for col in df_colunas)
+    colunas_padronizadas = [padronizar_nome_coluna(col) for col in df_colunas]
+    colunas_upper = [col.upper() for col in colunas_padronizadas]
     
-    # Verificar campos presentes e ausentes
-    campos_presentes = campos_essenciais.intersection(colunas_padronizadas)
-    campos_ausentes = campos_essenciais - colunas_padronizadas
+    campos_encontrados = {}
+    campos_faltantes = []
+    campos_opcionais_encontrados = {}
+    
+    # Validar campos essenciais
+    for campo_essencial, variacoes in campos_essenciais.items():
+        encontrado = False
+        for variacao in variacoes:
+            if variacao.upper() in colunas_upper:
+                idx = colunas_upper.index(variacao.upper())
+                campos_encontrados[campo_essencial] = df_colunas[idx]
+                encontrado = True
+                break
+        
+        if not encontrado:
+            campos_faltantes.append(campo_essencial)
+    
+    # Verificar campos opcionais
+    for campo_opcional, variacoes in campos_opcionais.items():
+        for variacao in variacoes:
+            if variacao.upper() in colunas_upper:
+                idx = colunas_upper.index(variacao.upper())
+                campos_opcionais_encontrados[campo_opcional] = df_colunas[idx]
+                break
     
     resultado = {
-        'valido': len(campos_ausentes) == 0,
-        'campos_presentes': list(campos_presentes),
-        'campos_ausentes': list(campos_ausentes),
+        'valido': len(campos_faltantes) == 0,
+        'campos_encontrados': campos_encontrados,
+        'campos_faltantes': campos_faltantes,
+        'campos_opcionais_encontrados': campos_opcionais_encontrados,
         'total_colunas': len(df_colunas),
-        'colunas_padronizadas': list(colunas_padronizadas)
+        'cobertura_essencial': (len(campos_encontrados) / len(campos_essenciais)) * 100,
+        'cobertura_opcional': (len(campos_opcionais_encontrados) / len(campos_opcionais)) * 100,
+        'colunas_padronizadas': colunas_padronizadas
     }
     
-    if campos_ausentes:
-        logger.error(f"Campos essenciais ausentes no arquivo CAGED: {campos_ausentes}")
+    if campos_faltantes:
+        logger.error(f"Campos essenciais ausentes no arquivo CAGED: {campos_faltantes}")
     else:
         logger.info("Todos os campos essenciais do CAGED estão presentes")
+    
+    logger.info(f"Cobertura essencial: {resultado['cobertura_essencial']:.1f}%")
+    logger.info(f"Cobertura opcional: {resultado['cobertura_opcional']:.1f}%")
     
     return resultado
 
@@ -453,6 +569,7 @@ def criar_mapeamento_caged_flexivel(df_colunas: List[str]) -> Dict[str, str]:
     """
     Cria um mapeamento flexível para colunas CAGED, tentando identificar
     automaticamente campos mesmo com variações de nomenclatura.
+    Baseado no layout oficial do Novo CAGED.
     
     Args:
         df_colunas: Lista de colunas originais
@@ -460,43 +577,139 @@ def criar_mapeamento_caged_flexivel(df_colunas: List[str]) -> Dict[str, str]:
     Returns:
         Mapeamento otimizado para CAGED
     """
-    # Mapeamento base com variações conhecidas
+    # Mapeamento base com variações conhecidas baseado no layout oficial
     mapeamentos_conhecidos = {
-        # Competência
-        'competencia': 'COMPETENCIA',
-        'competência': 'COMPETENCIA', 
-        'mes': 'COMPETENCIA',
-        'mês': 'COMPETENCIA',
-        'periodo': 'COMPETENCIA',
-        'período': 'COMPETENCIA',
+        # Campos temporais
+        'competencia': 'COMPETENCIA_MOV',
+        'competência': 'COMPETENCIA_MOV',
+        'competenciamov': 'COMPETENCIA_MOV',
+        'competência da movimentação': 'COMPETENCIA_MOV',
+        'competenciaexc': 'COMPETENCIA_EXC',
+        'competência da exclusão': 'COMPETENCIA_EXC',
+        'competenciadec': 'COMPETENCIA_DEC',
+        'competência da declaração': 'COMPETENCIA_DEC',
         
-        # Localização
+        # Localização geográfica
         'regiao': 'REGIAO',
         'região': 'REGIAO',
+        'região geográfica': 'REGIAO',
         'uf': 'UF',
         'estado': 'UF',
+        'unidade da federação': 'UF',
         'municipio': 'MUNICIPIO',
         'município': 'MUNICIPIO',
+        'código do município': 'MUNICIPIO',
         'cidade': 'MUNICIPIO',
         
-        # Movimentações
-        'admissoes': 'ADMISSOES',
-        'admissões': 'ADMISSOES',
-        'admitidos': 'ADMISSOES',
-        'contratacoes': 'ADMISSOES',
-        'contratações': 'ADMISSOES',
+        # Atividade econômica
+        'secao': 'SECAO',
+        'seção': 'SECAO',
+        'seção cnae': 'SECAO',
+        'subclasse': 'SUBCLASSE',
+        'subclasse cnae': 'SUBCLASSE',
+        'cnae subclasse': 'SUBCLASSE',
         
-        'desligamentos': 'DESLIGAMENTOS',
-        'demissoes': 'DESLIGAMENTOS',
-        'demissões': 'DESLIGAMENTOS',
-        'saidas': 'DESLIGAMENTOS',
-        'saídas': 'DESLIGAMENTOS',
-        
+        # Movimentação
         'saldo': 'SALDO_MOVIMENTACAO',
         'saldo_movimentacao': 'SALDO_MOVIMENTACAO',
         'saldo_movimentação': 'SALDO_MOVIMENTACAO',
-        'variacao': 'SALDO_MOVIMENTACAO',
-        'variação': 'SALDO_MOVIMENTACAO'
+        'saldomovimentação': 'SALDO_MOVIMENTACAO',
+        'valor da movimentação': 'SALDO_MOVIMENTACAO',
+        'tipomovimentacao': 'TIPO_MOVIMENTACAO',
+        'tipo_movimentacao': 'TIPO_MOVIMENTACAO',
+        'tipo_movimentação': 'TIPO_MOVIMENTACAO',
+        'tipo de movimentação': 'TIPO_MOVIMENTACAO',
+        
+        # Características do trabalhador
+        'categoria': 'CATEGORIA',
+        'categoria de trabalhador': 'CATEGORIA',
+        'cbo2002ocupacao': 'CBO2002_OCUPACAO',
+        'cbo2002ocupação': 'CBO2002_OCUPACAO',
+        'cbo 2002 ocupação': 'CBO2002_OCUPACAO',
+        'ocupacao': 'CBO2002_OCUPACAO',
+        'ocupação': 'CBO2002_OCUPACAO',
+        'grauinstrucao': 'GRAU_INSTRUCAO',
+        'grau_instrucao': 'GRAU_INSTRUCAO',
+        'grau_instrução': 'GRAU_INSTRUCAO',
+        'grau de instrução': 'GRAU_INSTRUCAO',
+        'escolaridade': 'GRAU_INSTRUCAO',
+        'idade': 'IDADE',
+        'idade do trabalhador': 'IDADE',
+        'horascontratuais': 'HORAS_CONTRATUAIS',
+        'horas_contratuais': 'HORAS_CONTRATUAIS',
+        'horas contratuais': 'HORAS_CONTRATUAIS',
+        'racacor': 'RACA_COR',
+        'raca_cor': 'RACA_COR',
+        'raça_cor': 'RACA_COR',
+        'raça ou cor': 'RACA_COR',
+        'cor': 'RACA_COR',
+        'raca': 'RACA_COR',
+        'raça': 'RACA_COR',
+        'sexo': 'SEXO',
+        'sexo do trabalhador': 'SEXO',
+        'genero': 'SEXO',
+        'gênero': 'SEXO',
+        
+        # Características do empregador/estabelecimento
+        'cnpjraiz': 'CNPJ_RAIZ',
+        'cnpj_raiz': 'CNPJ_RAIZ',
+        'cnpj raiz': 'CNPJ_RAIZ',
+        'tipoempregador': 'TIPO_EMPREGADOR',
+        'tipo_empregador': 'TIPO_EMPREGADOR',
+        'tipo de empregador': 'TIPO_EMPREGADOR',
+        'tipoestabelecimento': 'TIPO_ESTABELECIMENTO',
+        'tipo_estabelecimento': 'TIPO_ESTABELECIMENTO',
+        'tipo de estabelecimento': 'TIPO_ESTABELECIMENTO',
+        'tamestabjan': 'TAM_ESTAB_JAN',
+        'tam_estab_jan': 'TAM_ESTAB_JAN',
+        'tamanho estabelecimento janeiro': 'TAM_ESTAB_JAN',
+        
+        # Indicadores especiais
+        'tipodedeficiencia': 'TIPO_DEFICIENCIA',
+        'tipo_deficiencia': 'TIPO_DEFICIENCIA',
+        'tipo de deficiência': 'TIPO_DEFICIENCIA',
+        'deficiencia': 'TIPO_DEFICIENCIA',
+        'deficiência': 'TIPO_DEFICIENCIA',
+        'indtrabintermitente': 'IND_TRAB_INTERMITENTE',
+        'ind_trab_intermitente': 'IND_TRAB_INTERMITENTE',
+        'indicador trabalhador intermitente': 'IND_TRAB_INTERMITENTE',
+        'trabalho intermitente': 'IND_TRAB_INTERMITENTE',
+        'indtrabparcial': 'IND_TRAB_PARCIAL',
+        'ind_trab_parcial': 'IND_TRAB_PARCIAL',
+        'indicador trabalhador parcial': 'IND_TRAB_PARCIAL',
+        'trabalho parcial': 'IND_TRAB_PARCIAL',
+        'indicadoraprendiz': 'IND_APRENDIZ',
+        'ind_aprendiz': 'IND_APRENDIZ',
+        'indicador aprendiz': 'IND_APRENDIZ',
+        'aprendiz': 'IND_APRENDIZ',
+        'indicadordeexclusao': 'INDICADOR_EXCLUSAO',
+        'indicador_exclusao': 'INDICADOR_EXCLUSAO',
+        'indicador de exclusão': 'INDICADOR_EXCLUSAO',
+        'exclusao': 'INDICADOR_EXCLUSAO',
+        'exclusão': 'INDICADOR_EXCLUSAO',
+        'indicadordeforadoprazo': 'INDICADOR_FORA_PRAZO',
+        'indicador_fora_prazo': 'INDICADOR_FORA_PRAZO',
+        'indicador fora do prazo': 'INDICADOR_FORA_PRAZO',
+        'fora do prazo': 'INDICADOR_FORA_PRAZO',
+        
+        # Informações salariais
+        'salario': 'SALARIO',
+        'salário': 'SALARIO',
+        'salário mensal': 'SALARIO',
+        'unidadesalariocodigo': 'UNIDADE_SALARIO_CODIGO',
+        'unidade_salario_codigo': 'UNIDADE_SALARIO_CODIGO',
+        'unidade salário código': 'UNIDADE_SALARIO_CODIGO',
+        'valorsalariofixo': 'VALOR_SALARIO_FIXO',
+        'valor_salario_fixo': 'VALOR_SALARIO_FIXO',
+        'valor salário fixo': 'VALOR_SALARIO_FIXO',
+        'salario fixo': 'VALOR_SALARIO_FIXO',
+        'salário fixo': 'VALOR_SALARIO_FIXO',
+        
+        # Origem e controle
+        'origemdainformacao': 'ORIGEM_INFORMACAO',
+        'origem_informacao': 'ORIGEM_INFORMACAO',
+        'origem da informação': 'ORIGEM_INFORMACAO',
+        'origem': 'ORIGEM_INFORMACAO'
     }
     
     # Criar mapeamento padrão

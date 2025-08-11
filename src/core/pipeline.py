@@ -29,6 +29,7 @@ class ProcessingStage(Enum):
     DOWNLOAD = "download"
     EXTRACT = "extract"
     CONVERT = "convert"
+    CALCULATE_SALDO = "calculate_saldo"
     CONSOLIDATE = "consolidate"
     VALIDATE = "validate"
     CLEANUP = "cleanup"
@@ -122,6 +123,11 @@ class CAGEDPipeline:
         self._progress_callback: Optional[Callable] = None
         self._error_callback: Optional[Callable] = None
     
+    def set_stage_handlers(self, handlers: Dict[ProcessingStage, PipelineStageHandler]):
+        """Define o dicionário de handlers de estágio."""
+        self._stage_handlers = handlers
+        self.logger.info(f"{len(handlers)} handlers de estágio foram definidos.")
+
     def register_stage_handler(self, stage: ProcessingStage, handler: PipelineStageHandler):
         """Registra handler para um estágio"""
         self._stage_handlers[stage] = handler
@@ -261,18 +267,38 @@ class CAGEDPipeline:
         """Cria itens de processamento para um ano e meses específicos"""
         items = []
         
+        available_months = []
         try:
             from ..services.ftp_service import FTPService
             ftp_service = FTPService(self.config)
             available_months = ftp_service.list_remote_directories(year)
 
             if not available_months:
-                self.logger.warning(f"Nenhum mês encontrado para o ano {year} no FTP.")
-                return []
+                self.logger.warning(f"Nenhum mês encontrado para o ano {year} no FTP. Verificando dados locais.")
 
         except Exception as e:
-            self.logger.error(f"Erro ao buscar meses do FTP para o ano {year}: {e}")
-            raise PipelineError(f"Não foi possível obter a lista de meses para {year}")
+            self.logger.warning(f"Erro ao buscar meses do FTP para o ano {year}: {e}. Verificando dados locais.")
+
+        if not available_months:
+            # Fallback para dados locais se o FTP falhar ou não retornar nada
+            local_parquet_dir = Path(self.config.storage.parquet_dir)
+            year_dir = local_parquet_dir / str(year)
+            if year_dir.exists():
+                for month_dir in year_dir.iterdir():
+                    if month_dir.is_dir() and month_dir.name.startswith(str(year)):
+                        try:
+                            month = int(month_dir.name[4:])
+                            available_months.append(month)
+                        except ValueError:
+                            continue
+                if available_months:
+                    self.logger.info(f"Meses encontrados localmente para o ano {year}: {available_months}")
+                else:
+                    self.logger.warning(f"Nenhum dado local encontrado para o ano {year}.")
+                    return []
+            else:
+                self.logger.warning(f"Diretório local não encontrado para o ano {year}: {year_dir}")
+                return []
 
         # Filtra os meses solicitados com base nos meses disponíveis
         if months:

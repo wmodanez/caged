@@ -32,7 +32,7 @@ class FTPConfig:
     port: int = 21
     username: str = "anonymous"
     password: str = "user@example.com"
-    base_path: str = "/pdet/microdados/NOVO CAGED/"
+    base_path: str = "/pdet/microdados/NOVO CAGED"
     timeout: int = 60  # Aumentado para 60 segundos
     retry_attempts: int = 3
     

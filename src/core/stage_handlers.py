@@ -297,9 +297,10 @@ class ExtractStageHandler(PipelineStageHandler):
 class ConvertStageHandler(PipelineStageHandler):
     """Handler para estágio de conversão"""
     
-    def __init__(self, config: CAGEDConfig, logger: logging.Logger):
+    def __init__(self, config: CAGEDConfig, logger: logging.Logger, campos_selecionados: Optional[str] = None):
         super().__init__(config, logger)
         self.output_config = config.output
+        self.campos_selecionados = campos_selecionados
         # Inicializar ConvertService
         from ..services.convert_service import ConvertService
         self.convert_service = ConvertService(config)
@@ -348,30 +349,40 @@ class ConvertStageHandler(PipelineStageHandler):
             converted_files = []
             total_size = 0
             
+            # Validar e converter a string de campos em lista
+            lista_campos = None
+            if self.campos_selecionados:
+                try:
+                    # Exemplo de validação simples: remover espaços e dividir por vírgula
+                    lista_campos = [campo.strip() for campo in self.campos_selecionados.split(',')]
+                    self.logger.info(f"Campos selecionados para conversão: {lista_campos}")
+                except Exception as e:
+                    self.logger.warning(f"Formato inválido para --campos: '{self.campos_selecionados}'. Ignorando. Erro: {e}")
+
             for input_file in input_files:
                 # Definir arquivo de saída
                 output_file = output_dir / f"{input_file.stem}.{self.output_config.format.lower()}"
                 
                 # Converter arquivo
                 self.logger.info(f"Convertendo {input_file} para {output_file}")
+                # Usar functools.partial para passar argumentos nomeados
                 success = await asyncio.get_event_loop().run_in_executor(
                     None,
-                    self.convert_service.convert_to_parquet,
-                    str(input_file),
-                    str(output_file),
-                    None,  # schema
-                    self.output_config.compression,
-                    None,  # progress_callback
-                    True,  # auto_detect_encoding
-                    self.config.processing.chunk_size,  # chunk_size
-                    None   # validation_rules
+                    self.convert_service.processar_arquivo_mensal_wrapper,
+                    Path(input_file),
+                    item.ano,
+                    item.mes,
+                    lista_campos
                 )
                 
-                if success and output_file.exists():
-                    file_size = output_file.stat().st_size
-                    converted_files.append(str(output_file))
+                # Verificar se o arquivo foi salvo no diretório files-parquet
+                parquet_file = Path(f"files-parquet/CAGEDMOV{item.ano}{item.mes:02d}.parquet")
+                
+                if success and parquet_file.exists():
+                    file_size = parquet_file.stat().st_size
+                    converted_files.append(str(parquet_file))
                     total_size += file_size
-                    self.logger.info(f"✅ Arquivo convertido: {output_file} ({file_size} bytes)")
+                    self.logger.info(f"✅ Arquivo convertido: {parquet_file} ({file_size} bytes)")
                 else:
                     self.logger.warning(f"⚠️ Falha ao converter {input_file}")
             
@@ -890,14 +901,70 @@ class ConsolidateStageHandler(PipelineStageHandler):
         return False
 
 
-def create_stage_handlers(config: CAGEDConfig) -> Dict[ProcessingStage, PipelineStageHandler]:
+class CalculateSaldoStageHandler(PipelineStageHandler):
+    """Handler para o estágio de cálculo de saldo."""
+
+    def __init__(self, config: CAGEDConfig, logger: logging.Logger, incremental: bool = False):
+        super().__init__(config, logger)
+        from ..services.saldo_service import SaldoService
+        self.saldo_service = SaldoService(logger=self.logger)
+        self.incremental = incremental
+        self.logger.info(f"CalculateSaldoStageHandler initialized with incremental={self.incremental}")
+
+    async def process(self, item: ProcessingItem) -> ProcessingResult:
+        """Processa o cálculo do saldo para um item."""
+        start_time = time.time()
+        self.logger.info(f"Saldo para {item.id}")
+        self.logger.info(f"Verificando flag incremental no process: {self.incremental}")
+
+        try:
+            if self.incremental:
+                self.logger.info("Executando cálculo de saldo incremental.")
+                await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    self.saldo_service.calcular_e_atualizar_saldo_incremental,
+                    [item.ano],
+                    [item.mes]
+                )
+            else:
+                self.logger.info("Executando cálculo de saldo completo.")
+                await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    self.saldo_service.calcular_e_atualizar_saldo,
+                    [item.ano],
+                    [item.mes]
+                )
+
+            duration = time.time() - start_time
+            self.logger.info(f"Cálculo de saldo concluído para {item.id}.")
+
+            return ProcessingResult(
+                item=item,
+                success=True,
+                duration=duration
+            )
+
+        except Exception as e:
+            duration = time.time() - start_time
+            error_msg = f"Erro no cálculo de saldo: {e}"
+            self.logger.error(error_msg)
+            return ProcessingResult(
+                item=item,
+                success=False,
+                duration=duration,
+                errors=[error_msg]
+            )
+
+
+def create_stage_handlers(config: CAGEDConfig, incremental_saldo: bool = False, campos_selecionados: Optional[str] = None) -> Dict[ProcessingStage, PipelineStageHandler]:
     """Cria todos os handlers de estágio"""
     logger = setup_logger("stage_handlers", config.logging.level)
     
     handlers = {
         ProcessingStage.DOWNLOAD: DownloadStageHandler(config, logger),
         ProcessingStage.EXTRACT: ExtractStageHandler(config, logger),
-        ProcessingStage.CONVERT: ConvertStageHandler(config, logger),
+        ProcessingStage.CONVERT: ConvertStageHandler(config, logger, campos_selecionados=campos_selecionados),
+        ProcessingStage.CALCULATE_SALDO: CalculateSaldoStageHandler(config, logger, incremental=incremental_saldo),
         ProcessingStage.CONSOLIDATE: ConsolidateStageHandler(config, logger),
         ProcessingStage.VALIDATE: ValidateStageHandler(config, logger),
         ProcessingStage.CLEANUP: CleanupStageHandler(config, logger)

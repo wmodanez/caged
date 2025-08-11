@@ -1175,9 +1175,8 @@ class DescompactadorCaged:
             metadados["competencia"] = f"{metadados['ano']}-{metadados['mes']:02d}"
         
         # Identificar UF com padrões específicos do CAGED
-        ufs = ["AC", "AL", "AM", "AP", "BA", "CE", "DF", "ES", "GO", "MA", 
-               "MG", "MS", "MT", "PA", "PB", "PE", "PI", "PR", "RJ", "RN", 
-               "RO", "RR", "RS", "SC", "SE", "SP", "TO"]
+        from src.entities.enums import UF
+        ufs = [uf.value for uf in UF if uf.value != '99']  # Excluir 'Não Identificado'
         
         # Busca mais robusta de UF no nome do arquivo
         nome_upper = nome_arquivo.upper()

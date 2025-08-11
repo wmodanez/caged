@@ -42,7 +42,8 @@ def configurar_logging(nivel: str = "WARNING", usar_emojis: bool = True, enable_
         "ftp": nivel,
         "descompactador": nivel,
         "conversor": nivel,
-        "validador": nivel
+        "validador": nivel,
+        "src": nivel
     }
     
     return setup_logger(
@@ -93,11 +94,14 @@ def cli(ctx, config, profile, debug):
 @click.option('--download', is_flag=True, help='Executar etapa de download')
 @click.option('--extract', is_flag=True, help='Executar etapa de extração')
 @click.option('--convert', is_flag=True, help='Executar etapa de conversão')
+@click.option('--calculate-saldo', is_flag=True, help='Executar etapa de cálculo de saldo')
 @click.option('--consolidate', is_flag=True, help='Executar etapa de consolidação anual')
 @click.option('--skip-download', is_flag=True, help='Pular etapa de download')
 @click.option('--skip-extract', is_flag=True, help='Pular etapa de extração')
 @click.option('--skip-convert', is_flag=True, help='Pular etapa de conversão')
+@click.option('--skip-calculate-saldo', is_flag=True, help='Pular etapa de cálculo de saldo')
 @click.option('--skip-consolidate', is_flag=True, help='Pular etapa de consolidação')
+@click.option('--incremental', is_flag=True, help='Executar cálculo de saldo incremental')
 @click.option('--campos', help='Campos específicos para conversão')
 @click.option('--dry-run', is_flag=True, help='Apenas validar, não executar')
 @click.option('--workers', type=int, help='Número de workers paralelos (calculado automaticamente se não informado)')
@@ -107,7 +111,7 @@ def cli(ctx, config, profile, debug):
 @click.option('--limpar-arquivos', is_flag=True, help='Apagar arquivos após o processamento bem-sucedido')
 @click.pass_context
 def processar(ctx, ano, mes, ano_inicio, mes_inicio, ano_fim, mes_fim,
-             download, extract, convert, consolidate, skip_download, skip_extract, skip_convert, skip_consolidate,
+             download, extract, convert, calculate_saldo, consolidate, skip_download, skip_extract, skip_convert, skip_calculate_saldo, skip_consolidate, incremental,
              campos, dry_run, workers, resume, sequential, parallel_items, limpar_arquivos):
     """
     🔄 Comando Unificado de Processamento
@@ -213,8 +217,8 @@ def processar(ctx, ano, mes, ano_inicio, mes_inicio, ano_fim, mes_fim,
         
         # Determinar etapas de processamento
         stages = _determine_processing_stages(
-            download, extract, convert, consolidate,
-            skip_download, skip_extract, skip_convert, skip_consolidate
+            download, extract, convert, calculate_saldo, consolidate,
+            skip_download, skip_extract, skip_convert, skip_calculate_saldo, skip_consolidate
         )
 
         if limpar_arquivos:
@@ -261,18 +265,21 @@ def processar(ctx, ano, mes, ano_inicio, mes_inicio, ano_fim, mes_fim,
             logger.warning("Nenhum item de processamento criado. Verifique a disponibilidade dos dados.")
             return
         
+        # Criar e configurar os handlers de estágio
+        from src.core.stage_handlers import create_stage_handlers
+        stage_handlers = create_stage_handlers(
+            config,
+            incremental_saldo=incremental,
+            campos_selecionados=campos
+        )
+        pipeline.set_stage_handlers(stage_handlers)
+
         # Verificar se é processamento multi-anual e configurar consolidação
         if ProcessingStage.CONSOLIDATE in stages and len(anos_unicos) > 1:
-            # Configurar contexto multi-anual no handler de consolidação
-            from src.core.stage_handlers import create_stage_handlers
-            stage_handlers = create_stage_handlers(config)
             consolidate_handler = stage_handlers.get(ProcessingStage.CONSOLIDATE)
             if consolidate_handler:
                 consolidate_handler.set_multi_year_context(anos_unicos)
                 logger.info(f"🔗 Configurada consolidação multi-anual para período {min(anos_unicos)}-{max(anos_unicos)}")
-            
-            # Atualizar pipeline com handlers configurados
-            pipeline._stage_handlers = stage_handlers
         
         # Executar validações centralizadas
         _execute_validations(items, stages, config, logger)
@@ -298,8 +305,6 @@ def processar(ctx, ano, mes, ano_inicio, mes_inicio, ano_fim, mes_fim,
             
             click.echo("\n💡 Execute sem --dry-run para processar os dados")
             return
-        
-        # O pipeline já foi instanciado anteriormente
         
         # Registrar handlers (implementação futura)
         # _register_pipeline_handlers(pipeline, config)
@@ -704,14 +709,14 @@ def config_set(ctx, profile, section, key, value):
         sys.exit(1)
 
 
-def _determine_processing_stages(download, extract, convert, consolidate,
-                               skip_download, skip_extract, skip_convert, skip_consolidate) -> List[ProcessingStage]:
+def _determine_processing_stages(download, extract, convert, calculate_saldo, consolidate,
+                               skip_download, skip_extract, skip_convert, skip_calculate_saldo, skip_consolidate) -> List[ProcessingStage]:
     """Determina quais estágios executar baseado nos flags"""
     stages = []
     
     # Se nenhum flag específico foi usado, executar todas as etapas incluindo consolidação
-    if not any([download, extract, convert, consolidate, skip_download, skip_extract, skip_convert, skip_consolidate]):
-        return [ProcessingStage.DOWNLOAD, ProcessingStage.EXTRACT, ProcessingStage.CONVERT, ProcessingStage.CONSOLIDATE]
+    if not any([download, extract, convert, calculate_saldo, consolidate, skip_download, skip_extract, skip_convert, skip_calculate_saldo, skip_consolidate]):
+        return [ProcessingStage.DOWNLOAD, ProcessingStage.EXTRACT, ProcessingStage.CONVERT, ProcessingStage.CALCULATE_SALDO, ProcessingStage.CONSOLIDATE]
     
     # Determinar etapas baseado nos flags
     if download or (not skip_download and not any([extract, convert, consolidate])):
@@ -720,15 +725,18 @@ def _determine_processing_stages(download, extract, convert, consolidate,
     if extract or (not skip_extract and not any([download, convert, consolidate])):
         stages.append(ProcessingStage.EXTRACT)
     
-    if convert or (not skip_convert and not any([download, extract, consolidate])):
+    if convert or (not skip_convert and not any([download, extract, calculate_saldo, consolidate])):
         stages.append(ProcessingStage.CONVERT)
     
+    if calculate_saldo or (not skip_calculate_saldo and not any([download, extract, convert, consolidate])):
+        stages.append(ProcessingStage.CALCULATE_SALDO)
+    
     # Consolidação é incluída por padrão, exceto se explicitamente pulada
-    if consolidate or (not skip_consolidate and not any([download, extract, convert])):
+    if consolidate or (not skip_consolidate and not any([download, extract, convert, calculate_saldo])):
         stages.append(ProcessingStage.CONSOLIDATE)
     
     # Se apenas flags skip foram usados, incluir etapas não puladas
-    if any([skip_download, skip_extract, skip_convert, skip_consolidate]) and not any([download, extract, convert, consolidate]):
+    if any([skip_download, skip_extract, skip_convert, skip_calculate_saldo, skip_consolidate]) and not any([download, extract, convert, calculate_saldo, consolidate]):
         stages = []
         
         if not skip_download:
@@ -737,6 +745,8 @@ def _determine_processing_stages(download, extract, convert, consolidate,
             stages.append(ProcessingStage.EXTRACT)
         if not skip_convert:
             stages.append(ProcessingStage.CONVERT)
+        if not skip_calculate_saldo:
+            stages.append(ProcessingStage.CALCULATE_SALDO)
         if not skip_consolidate:
             stages.append(ProcessingStage.CONSOLIDATE)
     
@@ -789,6 +799,7 @@ def _get_stage_emoji(stage: ProcessingStage) -> str:
         ProcessingStage.DOWNLOAD: "📥",
         ProcessingStage.EXTRACT: "📦",
         ProcessingStage.CONVERT: "🔄",
+        ProcessingStage.CALCULATE_SALDO: "🧮",
         ProcessingStage.CONSOLIDATE: "📊",
         ProcessingStage.VALIDATE: "✅",
         ProcessingStage.CLEANUP: "🧹"
@@ -801,8 +812,9 @@ def _get_stage_name(stage: ProcessingStage) -> str:
     names = {
         ProcessingStage.DOWNLOAD: "Download",
         ProcessingStage.EXTRACT: "Extract",
-        ProcessingStage.CONVERT: "Convert",
-        ProcessingStage.CONSOLIDATE: "Consolidate",
+        ProcessingStage.CONVERT: "Converter",
+        ProcessingStage.CALCULATE_SALDO: "Calcular Saldo",
+        ProcessingStage.CONSOLIDATE: "Consolidar",
         ProcessingStage.VALIDATE: "Validate",
         ProcessingStage.CLEANUP: "Cleanup"
     }
