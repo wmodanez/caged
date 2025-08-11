@@ -336,9 +336,9 @@ class DescompactadorCaged:
     def _log_info(self, mensagem: str, emoji: str = "ℹ️"):
         """Log de informação com emoji opcional"""
         if self.usar_emojis:
-            self.logger.info(f"{emoji} {mensagem}")
+            self.logger.debug(f"{emoji} {mensagem}")
         else:
-            self.logger.info(mensagem)
+            self.logger.debug(mensagem)
     
     def _log_warning(self, mensagem: str, emoji: str = "⚠️"):
         """Log de aviso com emoji opcional"""
@@ -448,7 +448,7 @@ class DescompactadorCaged:
             
             with py7zr.SevenZipFile(arquivo_7z, mode='r') as archive:
                 arquivos_internos = archive.getnames()
-                self._log_info(f"{len(arquivos_internos)} arquivos encontrados", "📋")
+                self._log_debug(f"{len(arquivos_internos)} arquivos encontrados", "📋")
                 archive.extractall(path=destino)
                 metadados["arquivos_extraidos"] = arquivos_internos
                 metadados["data_descompactacao"] = datetime.now().isoformat()
@@ -460,7 +460,7 @@ class DescompactadorCaged:
                 metadados["arquivos_validados"] = len(info_descompactado["arquivos_txt"]) + len(info_descompactado["arquivos_csv"])
                 metadados["tamanho_total_descompactado"] = info_descompactado["tamanho_total"]
                 self._log_success(f"Descompactado e validado com sucesso em: {destino}")
-                self._log_info(f"{metadados['arquivos_validados']} arquivos válidos, {metadados['tamanho_total_descompactado']} bytes", "📊")
+                self._log_debug(f"{metadados['arquivos_validados']} arquivos válidos, {metadados['tamanho_total_descompactado']} bytes", "📊")
                 
                 # Registrar sucesso no monitor
                 tempo_processamento = time.time() - inicio_processamento
@@ -625,7 +625,7 @@ class DescompactadorCaged:
         metadados_lista = []
         
         # Verificar quais arquivos precisam ser descompactados
-        self.logger.info(f"🔍 Verificando {len(arquivos_7z)} arquivos de {ano}/{mes:02d}...")
+        self.logger.debug(f"🔍 Verificando {len(arquivos_7z)} arquivos de {ano}/{mes:02d}...")
         arquivos_para_descompactar = []
         arquivos_verificados = 0
         inicio_verificacao = time.time()
@@ -660,10 +660,10 @@ class DescompactadorCaged:
                     'ETA': f"{(len(arquivos_7z) - arquivos_verificados) / arquivos_por_segundo:.0f}s" if arquivos_por_segundo > 0 else "--"
                 })
         
-        self.logger.info(f"✅ {len(arquivos_para_descompactar)} de {len(arquivos_7z)} arquivos precisam ser descompactados")
+        self.logger.debug(f"✅ {len(arquivos_para_descompactar)} de {len(arquivos_7z)} arquivos precisam ser descompactados")
         
         if arquivos_para_descompactar:
-            self.logger.info(f"🚀 Descompactando {len(arquivos_para_descompactar)} arquivos...")
+            self.logger.info(f"🚀 Descompactando {len(arquivos_para_descompactar)} arquivos de {ano}/{mes:02d}")
             inicio_descompactacao = time.time()
             bytes_processados = 0
             falhas_descompactacao = 0
@@ -706,7 +706,7 @@ class DescompactadorCaged:
                         'ETA': f"{(len(arquivos_para_descompactar) - i) / arquivos_por_segundo:.0f}s" if arquivos_por_segundo > 0 else "--"
                     })
         else:
-            self.logger.info("🎉 Todos os arquivos já estão descompactados!")
+            self.logger.info(f"🎉 Todos os arquivos de {ano}/{mes:02d} já estão descompactados!")
             inicio_descompactacao = time.time()
             bytes_processados = 0
         

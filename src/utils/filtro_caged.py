@@ -55,7 +55,7 @@ class FiltroCNAE:
         for codigo in codigos:
             self._classes_filtradas.add(str(codigo))
         
-        logger.info(f"Adicionados {len(codigos)} códigos CNAE ao filtro {self.nome_filtro}")
+        logger.debug(f"Adicionados {len(codigos)} códigos CNAE ao filtro {self.nome_filtro}")
         logger.debug(f"Códigos adicionados: {codigos}")
     
     def limpar_codigos(self) -> None:
@@ -63,7 +63,7 @@ class FiltroCNAE:
         Remove todos os códigos CNAE do filtro.
         """
         self._classes_filtradas = set()
-        logger.info(f"Códigos CNAE removidos do filtro {self.nome_filtro}")
+        logger.debug(f"Códigos CNAE removidos do filtro {self.nome_filtro}")
     
     def obter_codigos(self) -> Set[str]:
         """
@@ -107,7 +107,7 @@ class FiltroCNAE:
             
             if colunas_faltantes:
                 logger.error(f"Colunas necessárias não encontradas: {colunas_faltantes}")
-                logger.info(f"Colunas disponíveis: {df_cnae.columns}")
+                logger.debug(f"Colunas disponíveis: {df_cnae.columns}")
                 return set()
             
             # Filtrar apenas as classes com a situação desejada
@@ -116,7 +116,7 @@ class FiltroCNAE:
             # Extrair os códigos das classes filtradas como strings
             classes_filtradas = set(str(codigo) for codigo in df_filtrado["CLASSE_CNAE"].to_list())
             
-            logger.info(f"Carregadas {len(classes_filtradas)} classes CNAE para {self.nome_filtro} (situação {situacao_desejada})")
+            logger.debug(f"Carregadas {len(classes_filtradas)} classes CNAE para {self.nome_filtro} (situação {situacao_desejada})")
             logger.debug(f"Classes filtradas: {sorted(classes_filtradas)}")
             
             self._classes_filtradas = classes_filtradas
@@ -168,10 +168,10 @@ class FiltroCNAE:
         # Contar registros após o filtro
         total_depois = df_filtrado.height
         
-        logger.info(f"Filtro {self.nome_filtro} aplicado:")
-        logger.info(f"  Total antes: {total_antes:,} registros")
-        logger.info(f"  Total depois: {total_depois:,} registros")
-        logger.info(f"  Registros mantidos: {total_depois:,} ({total_depois/total_antes*100:.2f}%)")
+        logger.info(f"Filtro {self.nome_filtro}: {total_antes:,} → {total_depois:,} registros ({total_depois/total_antes*100:.2f}% mantidos)")
+        logger.debug(f"  Total antes: {total_antes:,} registros")
+        logger.debug(f"  Total depois: {total_depois:,} registros")
+        logger.debug(f"  Registros mantidos: {total_depois:,} ({total_depois/total_antes*100:.2f}%)")
         
         return df_filtrado
     
@@ -267,15 +267,15 @@ class FiltroPeriodo:
         self.anos = anos or []
         self.meses = meses or []
         
-        logger.info(f"Filtro de período configurado:")
+        logger.debug(f"Filtro de período configurado:")
         if self.data_inicio:
-            logger.info(f"  Data início: {self.data_inicio}")
+            logger.debug(f"  Data início: {self.data_inicio}")
         if self.data_fim:
-            logger.info(f"  Data fim: {self.data_fim}")
+            logger.debug(f"  Data fim: {self.data_fim}")
         if self.anos:
-            logger.info(f"  Anos: {self.anos}")
+            logger.debug(f"  Anos: {self.anos}")
         if self.meses:
-            logger.info(f"  Meses: {self.meses}")
+            logger.debug(f"  Meses: {self.meses}")
     
     def configurar_anos(self, anos: List[int]) -> None:
         """

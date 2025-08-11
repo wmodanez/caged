@@ -190,7 +190,7 @@ class LoggerConfig:
                 module_logger.setLevel(module_level_value)
         
         # Registrar inicialização do logger
-        logger.info(f"Logger '{name}' configurado com nível {level.upper()}")
+        logger.debug(f"Logger '{name}' configurado com nível {level.upper()}")
         
         return logger
     

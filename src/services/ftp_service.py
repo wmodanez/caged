@@ -109,7 +109,7 @@ def retry_on_ftp_error(max_retries: int = 3, delay: float = 3.0, backoff: float 
                     
                     if attempt < max_retries and should_retry:
                         logger.warning(f"🔄 Tentativa {attempt + 1}/{max_retries} falhou para {func.__name__}: {e}")
-                        logger.info(f"⏳ Aguardando {current_delay:.1f}s antes da próxima tentativa...")
+                        logger.debug(f"⏳ Aguardando {current_delay:.1f}s antes da próxima tentativa...")
                         time.sleep(current_delay)
                         current_delay *= backoff
                         
@@ -184,7 +184,7 @@ class FTPService:
             try:
                 ftp.cwd(self.config.base_path)
                 ftp.quit()
-                logger.info("✅ Conectividade FTP OK")
+                logger.debug("✅ Conectividade FTP OK")
                 return True
             except Exception as e:
                 logger.error(f"❌ Falha ao verificar conectividade FTP: {e}")
@@ -260,16 +260,16 @@ class FTPService:
         with self._get_ftp_connection() as ftp:
             try:
                 # Navegar para o diretório do ano
-                logger.info(f"📁 Navegando para o diretório do ano: {ano}")
+                logger.debug(f"📁 Navegando para o diretório do ano: {ano}")
                 ftp.cwd(f"{self.config.base_path}/{ano}")
 
                 # Navegar para o diretório do mês (formato AAAAMM)
                 month_dir = f"{ano}{mes:02d}"
-                logger.info(f"📁 Navegando para o diretório do mês: {month_dir}")
+                logger.debug(f"📁 Navegando para o diretório do mês: {month_dir}")
                 ftp.cwd(month_dir)
 
                 # Listar todos os arquivos .7z no diretório do mês
-                logger.info(f"🔍 Listando arquivos .7z disponíveis para {ano}/{month_dir}...")
+                logger.debug(f"🔍 Listando arquivos .7z disponíveis para {ano}/{month_dir}...")
                 all_files = ftp.nlst()
                 zip_files = [f for f in all_files if f.lower().endswith('.7z')]
 
@@ -277,7 +277,7 @@ class FTPService:
                     logger.warning(f"⚠️ Nenhum arquivo .7z encontrado para {ano}/{month_dir}")
                     return False
 
-                logger.info(f"📋 Encontrados {len(zip_files)} arquivos .7z para {ano}/{month_dir}")
+                logger.debug(f"📋 Encontrados {len(zip_files)} arquivos .7z para {ano}/{month_dir}")
 
                 # O diretório de destino já deve ser o caminho completo, incluindo ano e mês.
                 # Apenas garantimos que ele exista.
@@ -290,9 +290,9 @@ class FTPService:
                 for file in zip_files:
                     file_dest_path = dest_path / file
                     try:
-                        logger.info(f"📥 Baixando arquivo: {file}")
+                        logger.debug(f"📥 Baixando arquivo: {file}")
                         file_size = ftp.size(file)
-                        logger.info(f"📊 Tamanho: {self._format_size(file_size)}")
+                        logger.debug(f"📊 Tamanho: {self._format_size(file_size)}")
 
                         with open(file_dest_path, 'wb') as f:
                             ftp.retrbinary(f'RETR {file}', f.write)
@@ -306,7 +306,7 @@ class FTPService:
                         downloaded_size = file_dest_path.stat().st_size
                         total_size += downloaded_size
                         downloaded_files.append(file)
-                        logger.info(f"✅ Download concluído: {file} - {self._format_size(downloaded_size)}")
+                        logger.debug(f"✅ Download concluído: {file} - {self._format_size(downloaded_size)}")
 
                     except Exception as e:
                         logger.error(f"❌ Erro ao baixar {file}: {e}")
@@ -319,7 +319,7 @@ class FTPService:
                     return False
 
                 download_duration = time.time() - download_start_time
-                logger.info(f"✅ Download completo: {len(downloaded_files)} arquivos - {self._format_size(total_size)}")
+                logger.info(f"✅ Download completo para {ano}/{mes:02d}: {len(downloaded_files)} arquivos - {self._format_size(total_size)}")
 
                 record_operation(
                     "file_download",

@@ -70,7 +70,7 @@ class MetricsCollector:
         # Carregar métricas existentes
         self._load_metrics()
         
-        logger.info("MetricsCollector inicializado")
+        logger.debug("MetricsCollector inicializado")
     
     def record_operation(self, operation: str, success: bool, duration: float, 
                         details: Optional[Dict[str, Any]] = None) -> None:
@@ -342,7 +342,7 @@ class MetricsCollector:
             self.resource_history.clear()
             self.session_start = time.time()
             
-            logger.info("Métricas resetadas")
+            logger.debug("Métricas resetadas")
     
     def __enter__(self):
         """Context manager entry."""

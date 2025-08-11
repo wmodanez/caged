@@ -313,7 +313,7 @@ class StageParallelPipeline(CAGEDPipeline):
                 
                 try:
                     # Processar estágio
-                    self.logger.info(f"🔄 Processando estágio {stage.value} para item {item.id}")
+                    self.logger.debug(f"🔄 Processando estágio {stage.value} para item {item.id}")
                     stage_start_time = time.time()
                     
                     # Callback de progresso
@@ -395,7 +395,7 @@ class StageParallelPipeline(CAGEDPipeline):
                 
                 try:
                     # Processar estágio
-                    self.logger.info(f"🔄 Processando estágio {stage.value} para item {item.id}")
+                    self.logger.debug(f"🔄 Processando estágio {stage.value} para item {item.id}")
                     stage_start_time = time.time()
                     
                     # Callback de progresso
@@ -477,7 +477,7 @@ class StageParallelPipeline(CAGEDPipeline):
             
             # Log de progresso com contagem de sucessos e falhas
             progress = completed / total_items
-            self.logger.info(f"📈 Progresso: {completed}/{total_items} ({progress:.1%}) - ✅ {self._stats['success_count']} sucessos, ❌ {self._stats['failure_count']} falhas")
+            self.logger.debug(f"📈 Progresso: {completed}/{total_items} ({progress:.1%}) - ✅ {self._stats['success_count']} sucessos, ❌ {self._stats['failure_count']} falhas")
             
             # Marcar tarefa como concluída
             queue.task_done()

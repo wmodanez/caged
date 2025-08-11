@@ -333,11 +333,11 @@ class ConversorParquetCaged:
         self.medidor = MedidorTempo("Conversor CAGED v2.0")
         
         logger.info(f"Conversor CAGED v2.0 inicializado")
-        logger.info(f"Origem: {self.diretorio_origem}")
-        logger.info(f"Destino: {self.diretorio_destino}")
-        logger.info(f"Paralelismo: {self.habilitar_paralelismo} (workers: {self.max_workers})")
-        logger.info(f"Chunk size: {self.chunk_size}")
-        logger.info(f"Filtros: {self.habilitar_filtros}")
+        logger.debug(f"Origem: {self.diretorio_origem}")
+        logger.debug(f"Destino: {self.diretorio_destino}")
+        logger.debug(f"Paralelismo: {self.habilitar_paralelismo} (workers: {self.max_workers})")
+        logger.debug(f"Chunk size: {self.chunk_size}")
+        logger.debug(f"Filtros: {self.habilitar_filtros}")
     
     def _calcular_chunk_size_dinamico(self, tamanho_arquivo_bytes: int, 
                                      numero_colunas: int = 50) -> int:
@@ -443,7 +443,7 @@ class ConversorParquetCaged:
         # Aplicar limites mínimo e máximo
         workers_final = max(config['workers_min'], workers_otimo)
         
-        logger.info(f"Workers otimizados: {workers_final}")
+        logger.debug(f"Workers otimizados: {workers_final}")
         logger.debug(f"  - CPU: {cpu_count} cores → {workers_cpu} workers")
         logger.debug(f"  - Memória: {memoria_disponivel:,} MB → {workers_memoria} workers")
         logger.debug(f"  - Arquivos: {num_arquivos} → {workers_arquivos} workers")
@@ -580,7 +580,7 @@ class ConversorParquetCaged:
                 CONFIG_PARALELISMO['chunk_size_min']
             )
             
-            logger.info(f"Chunk size ajustado para memória: {chunk_size_inicial:,} → {chunk_size_ajustado:,}")
+            logger.debug(f"Chunk size ajustado para memória: {chunk_size_inicial:,} → {chunk_size_ajustado:,}")
             return chunk_size_ajustado
         
         return chunk_size_inicial
@@ -704,7 +704,7 @@ class ConversorParquetCaged:
             self.gerenciador_filtros = GerenciadorFiltros()
             config_filtros = {**CONFIG_FILTROS, **self.configuracao_filtros}
             
-            logger.info("Inicializando sistema de filtros...")
+            logger.debug("Inicializando sistema de filtros...")
             
             # Configurar filtro CNAE se especificado
             if 'filtro_cnae' in self.configuracao_filtros:
@@ -718,25 +718,25 @@ class ConversorParquetCaged:
                         nome_filtro=nome_filtro,
                         situacao=situacao
                     )
-                    logger.info(f"Filtro CNAE configurado: {nome_filtro}")
+                    logger.debug(f"Filtro CNAE configurado: {nome_filtro}")
             
             # Configurar filtro de período se especificado
             if 'filtro_periodo' in self.configuracao_filtros:
                 config_periodo = self.configuracao_filtros['filtro_periodo']
                 self.gerenciador_filtros.adicionar_filtro_periodo(**config_periodo)
-                logger.info("Filtro de período configurado")
+                logger.debug("Filtro de período configurado")
             
             # Configurar filtro de movimentação se especificado
             if 'filtro_movimentacao' in self.configuracao_filtros:
                 config_movimentacao = self.configuracao_filtros['filtro_movimentacao']
                 self.gerenciador_filtros.adicionar_filtro_movimentacao(**config_movimentacao)
-                logger.info("Filtro de movimentação configurado")
+                logger.debug("Filtro de movimentação configurado")
             
             # Configurar filtro geográfico se especificado
             if 'filtro_geografico' in self.configuracao_filtros:
                 config_geografico = self.configuracao_filtros['filtro_geografico']
                 self.gerenciador_filtros.adicionar_filtro_geografico(**config_geografico)
-                logger.info("Filtro geográfico configurado")
+                logger.debug("Filtro geográfico configurado")
             
             # Validar filtros se configurado
             if config_filtros.get('validar_filtros_inicializacao', True):

@@ -31,7 +31,7 @@ class CleanupStageHandler(PipelineStageHandler):
     async def process(self, item: ProcessingItem) -> ProcessingResult:
         """Processa a limpeza dos arquivos."""
         start_time = time.time()
-        self.logger.info(f"🗑️  Iniciando limpeza para {item.id}")
+        self.logger.debug(f"🗑️  Iniciando limpeza para {item.id}")
 
         try:
             # Arquivo compactado
@@ -114,7 +114,7 @@ class DownloadStageHandler(PipelineStageHandler):
         start_time = time.time()
         
         try:
-            self.logger.info(f"📥 Iniciando download para {item.id}")
+            self.logger.debug(f"📥 Iniciando download para {item.id}")
             
 
             
@@ -215,7 +215,7 @@ class ExtractStageHandler(PipelineStageHandler):
         start_time = time.time()
         
         try:
-            self.logger.info(f"📦 Iniciando extração para {item.id}")
+            self.logger.debug(f"📦 Iniciando extração para {item.id}")
 
             # Validar se o arquivo de entrada existe
             if not self.validate_item(item):
@@ -310,7 +310,7 @@ class ConvertStageHandler(PipelineStageHandler):
         start_time = time.time()
         
         try:
-            self.logger.info(f"🔄 Iniciando conversão para {item.id}")
+            self.logger.debug(f"🔄 Iniciando conversão para {item.id}")
 
             # Validar se o arquivo de entrada existe
             if not self.validate_item(item):
@@ -970,6 +970,6 @@ def create_stage_handlers(config: CAGEDConfig, incremental_saldo: bool = False, 
         ProcessingStage.CLEANUP: CleanupStageHandler(config, logger)
     }
     
-    logger.info(f"🔧 Criados {len(handlers)} handlers de estágio")
+    logger.debug(f"🔧 Criados {len(handlers)} handlers de estágio")
     
     return handlers

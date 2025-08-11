@@ -24,7 +24,7 @@ class SaldoService:
         """
         Calcula o saldo mensal seguindo a abordagem simplificada do arquivo de referencia.
         """
-        self.logger.info(f"Calculando saldo para anos: {anos}, meses: {meses}")
+        self.logger.debug(f"Calculando saldo para anos: {anos}, meses: {meses}")
         
         # 1. Carregar e combinar todos os tipos de dados
         df_combined = self._carregar_e_combinar_dados(anos, meses)
@@ -43,7 +43,7 @@ class SaldoService:
         output_path = self.parquet_path / "SALDOMENSAL.parquet"
         df_saldo.write_parquet(output_path)
         
-        self.logger.info(f"Saldo mensal salvo em: {output_path}")
+        self.logger.debug(f"Saldo mensal salvo em: {output_path}")
         print(f"Saldo mensal salvo em: {output_path}")
         
         return df_saldo
@@ -59,7 +59,7 @@ class SaldoService:
         if not df_mov.is_empty():
             df_mov = df_mov.with_columns(pl.lit("MOV").alias("Tipo"))
             dfs.append(df_mov)
-            self.logger.info(f"Carregados {df_mov.height} registros MOV")
+            self.logger.debug(f"Carregados {df_mov.height} registros MOV")
         
         # Carregar dados de exclusao (EXC)
         df_exc = self._carregar_dados_tipo(anos, meses, "CAGEDEXC")
@@ -77,14 +77,14 @@ class SaldoService:
                 pl.lit("EXC").alias("Tipo")
             ])
             dfs.append(df_exc)
-            self.logger.info(f"Carregados {df_exc.height} registros EXC")
+            self.logger.debug(f"Carregados {df_exc.height} registros EXC")
         
         # Carregar dados fora do prazo (FOR)
         df_for = self._carregar_dados_tipo(anos, meses, "CAGEDFORA")
         if not df_for.is_empty():
             df_for = df_for.with_columns(pl.lit("FOR").alias("Tipo"))
             dfs.append(df_for)
-            self.logger.info(f"Carregados {df_for.height} registros FOR")
+            self.logger.debug(f"Carregados {df_for.height} registros FOR")
         
         # Combinar todos os DataFrames
         if dfs:

@@ -67,12 +67,12 @@ class MedidorTempo:
         self.etapa_atual = None
         self.tempo_etapa_inicio = None
         
-        logger.info(f"Iniciando medição de tempo para: {nome_processo}")
+        logger.debug(f"Iniciando medição de tempo para: {nome_processo}")
     
     def iniciar_processo(self):
         """Inicia a medição do tempo total do processo."""
         self.tempo_inicio = time.time()
-        logger.info(f"Processo '{self.nome_processo}' iniciado")
+        logger.debug(f"Processo '{self.nome_processo}' iniciado")
     
     def finalizar_processo(self):
         """Finaliza a medição do tempo total do processo."""
@@ -94,7 +94,7 @@ class MedidorTempo:
         
         self.etapa_atual = nome_etapa
         self.tempo_etapa_inicio = time.time()
-        logger.info(f"Etapa '{nome_etapa}' iniciada")
+        logger.debug(f"Etapa '{nome_etapa}' iniciada")
     
     def finalizar_etapa(self):
         """Finaliza a medição da etapa atual."""
@@ -102,7 +102,7 @@ class MedidorTempo:
             tempo_etapa = time.time() - self.tempo_etapa_inicio
             self.etapas[self.etapa_atual] = tempo_etapa
             tempo_formatado = formatar_tempo(tempo_etapa)
-            logger.info(f"Etapa '{self.etapa_atual}' finalizada em {tempo_formatado}")
+            logger.debug(f"Etapa '{self.etapa_atual}' finalizada em {tempo_formatado}")
             self.etapa_atual = None
             self.tempo_etapa_inicio = None
     
@@ -352,7 +352,7 @@ def padronizar_colunas_dataframe(df_colunas: List[str], usar_versao_melhorada: b
     # Resolver duplicatas de forma mais robusta
     mapeamento = resolver_colunas_duplicadas(mapeamento)
     
-    logger.info(f"Padronização concluída: {len(mapeamento)} colunas processadas")
+    logger.debug(f"Padronização concluída: {len(mapeamento)} colunas processadas")
     return mapeamento
 
 
@@ -384,7 +384,7 @@ def resolver_colunas_duplicadas(mapeamento: Dict[str, str]) -> Dict[str, str]:
                     # Ocorrências subsequentes recebem sufixo
                     novo_nome = f"{nome_padronizado}_{contadores[nome_padronizado]}"
                     mapeamento_corrigido[coluna_original] = novo_nome
-                    logger.info(f"Coluna renomeada para evitar duplicação: '{coluna_original}' -> '{novo_nome}'")
+                    logger.debug(f"Coluna renomeada para evitar duplicação: '{coluna_original}' -> '{novo_nome}'")
             else:
                 mapeamento_corrigido[coluna_original] = nome_padronizado
         
@@ -416,7 +416,7 @@ def aplicar_padronizacao_colunas(df, mapeamento_colunas: Dict[str, str] = None) 
         # Fallback para Pandas
         df_renomeado = df.rename(columns=mapeamento_colunas)
     
-    logger.info(f"Colunas renomeadas: {len(mapeamento_colunas)} colunas processadas")
+    logger.debug(f"Colunas renomeadas: {len(mapeamento_colunas)} colunas processadas")
     return df_renomeado
 
 
@@ -557,10 +557,10 @@ def validar_campos_caged(df_colunas: List[str]) -> Dict[str, Any]:
     if campos_faltantes:
         logger.error(f"Campos essenciais ausentes no arquivo CAGED: {campos_faltantes}")
     else:
-        logger.info("Todos os campos essenciais do CAGED estão presentes")
+        logger.debug("Todos os campos essenciais do CAGED estão presentes")
     
-    logger.info(f"Cobertura essencial: {resultado['cobertura_essencial']:.1f}%")
-    logger.info(f"Cobertura opcional: {resultado['cobertura_opcional']:.1f}%")
+    logger.debug(f"Cobertura essencial: {resultado['cobertura_essencial']:.1f}%")
+    logger.debug(f"Cobertura opcional: {resultado['cobertura_opcional']:.1f}%")
     
     return resultado
 
