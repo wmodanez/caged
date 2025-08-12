@@ -375,15 +375,24 @@ class ConvertStageHandler(PipelineStageHandler):
                     lista_campos
                 )
                 
-                # Verificar se o arquivo foi salvo no diretório files-parquet
-                parquet_file = Path(f"files-parquet/CAGEDMOV{item.ano}{item.mes:02d}.parquet")
+                # Verificar se algum arquivo foi salvo no diretório files-parquet
+                # Buscar por todos os tipos de arquivo CAGED
+                output_pattern = Path(f"files-parquet/{item.ano}/{item.ano}{item.mes:02d}")
+                tipos_arquivo = ["CAGEDMOV", "CAGEDEXC", "CAGEDFORA"]
+                arquivo_encontrado = False
                 
-                if success and parquet_file.exists():
-                    file_size = parquet_file.stat().st_size
-                    converted_files.append(str(parquet_file))
-                    total_size += file_size
-                    self.logger.info(f"✅ Arquivo convertido: {parquet_file} ({file_size} bytes)")
-                else:
+                for tipo in tipos_arquivo:
+                    parquet_file = output_pattern / f"{tipo}{item.ano}{item.mes:02d}.parquet"
+                    if parquet_file.exists():
+                        file_size = parquet_file.stat().st_size
+                        converted_files.append(str(parquet_file))
+                        total_size += file_size
+                        self.logger.info(f"✅ Arquivo {tipo} convertido: {parquet_file} ({file_size} bytes)")
+                        arquivo_encontrado = True
+                
+                if success and not arquivo_encontrado:
+                    self.logger.warning(f"⚠️ Falha ao converter {input_file} - nenhum arquivo parquet gerado")
+                elif not success:
                     self.logger.warning(f"⚠️ Falha ao converter {input_file}")
             
 

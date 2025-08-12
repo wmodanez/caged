@@ -370,7 +370,7 @@ def resolver_colunas_duplicadas(mapeamento: Dict[str, str]) -> Dict[str, str]:
     duplicados = set([nome for nome in nomes_padronizados if nomes_padronizados.count(nome) > 1])
     
     if duplicados:
-        logger.warning(f"Colunas duplicadas detectadas: {duplicados}")
+        logger.debug(f"Colunas duplicadas detectadas: {duplicados}")
         contadores = {}
         mapeamento_corrigido = {}
         
@@ -465,7 +465,7 @@ def obter_colunas_invalidas(colunas: List[str]) -> List[str]:
             colunas_invalidas.append(coluna)
     
     if colunas_invalidas:
-        logger.warning(f"Encontradas {len(colunas_invalidas)} colunas com nomes inválidos: {colunas_invalidas}")
+        logger.debug(f"Encontradas {len(colunas_invalidas)} colunas com nomes inválidos: {colunas_invalidas}")
     
     return colunas_invalidas
 

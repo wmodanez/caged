@@ -1405,7 +1405,7 @@ class ConversorParquetCaged:
                     df = df.select(campos_disponiveis)
                     logger.debug(f"Campos filtrados: {len(campos_disponiveis)} de {len(campos_selecionados)}")
                 else:
-                    logger.warning("Nenhum campo selecionado encontrado no arquivo")
+                    logger.debug("Nenhum campo selecionado encontrado no arquivo")
             
             # Aplicar tipos de dados com detecção automática
             df = self._aplicar_tipos_dados(df)
@@ -1433,7 +1433,7 @@ class ConversorParquetCaged:
             if self.validar_integridade_dados(df):
                 logger.info("✅ Dados validados com sucesso")
             else:
-                logger.warning("⚠️  Alertas encontrados na validação")
+                logger.debug("Alertas encontrados na validação")
             
             # Converter para entidades com tratamento de erro
             try:
@@ -5065,11 +5065,25 @@ class ConvertService:
                 output_dir = Path(f"files-parquet/{ano}/{ano}{mes:02d}")
                 output_dir.mkdir(parents=True, exist_ok=True)
                 
-                # Salvar movimentações se existirem
-                if len(movimentacoes) > 0:
-                    mov_file = output_dir / f"CAGEDMOV{ano}{mes:02d}.parquet"
-                    df.write_parquet(mov_file)
-                    logger.info(f"✅ Arquivo de movimentações salvo: {mov_file}")
+                # Identificar tipo de arquivo baseado no nome
+                nome_arquivo = arquivo.name.upper()
+                tipo_arquivo = None
+                
+                if "CAGEDMOV" in nome_arquivo:
+                    tipo_arquivo = "CAGEDMOV"
+                elif "CAGEDEXC" in nome_arquivo:
+                    tipo_arquivo = "CAGEDEXC"
+                elif "CAGEDFORA" in nome_arquivo or "CAGEDFOR" in nome_arquivo:
+                    tipo_arquivo = "CAGEDFORA"
+                else:
+                    # Fallback para CAGEDMOV se não conseguir identificar
+                    tipo_arquivo = "CAGEDMOV"
+                    logger.warning(f"Tipo de arquivo não identificado para {arquivo.name}, usando CAGEDMOV como padrão")
+                
+                # Salvar arquivo com nome apropriado baseado no tipo
+                output_file = output_dir / f"{tipo_arquivo}{ano}{mes:02d}.parquet"
+                df.write_parquet(output_file)
+                logger.info(f"✅ Arquivo {tipo_arquivo} salvo: {output_file}")
                 
                 return True
             else:

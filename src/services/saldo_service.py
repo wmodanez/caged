@@ -23,24 +23,73 @@ class SaldoService:
     def calcular_saldo_mensal(self, anos: List[int], meses: List[int]):
         """
         Calcula o saldo mensal seguindo a abordagem simplificada do arquivo de referencia.
+        Agora verifica se já existe arquivo e faz append das novas competências.
         """
         self.logger.debug(f"Calculando saldo para anos: {anos}, meses: {meses}")
         
-        # 1. Carregar e combinar todos os tipos de dados
-        df_combined = self._carregar_e_combinar_dados(anos, meses)
+        output_path = self.parquet_path / "SALDOMENSAL.parquet"
         
-        if df_combined.is_empty():
-            self.logger.warning("Nenhum dado encontrado para o periodo especificado")
-            return
-        
-        # 2. Aplicar transformacoes conforme arquivo de referencia
-        df_processed = self._processar_dados(df_combined)
-        
-        # 3. Calcular saldo por competencia
-        df_saldo = self._calcular_saldo_por_competencia(df_processed)
+        # Verificar se já existe arquivo de saldo
+        if output_path.exists():
+            self.logger.info("Arquivo SALDOMENSAL.parquet já existe. Verificando competências existentes.")
+            df_existente = pl.read_parquet(output_path)
+            
+            # Obter competências já processadas
+            competencias_existentes = set(df_existente["competencia"].to_list())
+            self.logger.info(f"Competências já processadas: {sorted(competencias_existentes)}")
+            
+            # Filtrar apenas competências novas
+            competencias_novas = []
+            for ano in anos:
+                for mes in meses:
+                    competencia = f"{ano}{mes:02d}"
+                    if competencia not in competencias_existentes:
+                        competencias_novas.append((ano, mes))
+            
+            if not competencias_novas:
+                self.logger.info("Todas as competências solicitadas já foram processadas")
+                return df_existente
+            
+            # Extrair anos e meses das competências novas
+            anos_novos = list(set([comp[0] for comp in competencias_novas]))
+            meses_novos = list(set([comp[1] for comp in competencias_novas]))
+            
+            self.logger.info(f"Processando competências novas: {[f'{ano}{mes:02d}' for ano, mes in competencias_novas]}")
+            
+            # Calcular saldo apenas para as competências novas
+            df_novos = self._calcular_saldo_competencias_especificas(competencias_novas)
+            
+            if df_novos.is_empty():
+                self.logger.debug("Nenhum dado novo encontrado para processar")
+                return df_existente
+            
+            # Combinar dados existentes com novos
+            df_saldo = pl.concat([df_existente, df_novos], how="vertical")
+            
+            # Reordenar por competência
+            df_saldo = df_saldo.sort("competencia")
+            
+            # Recalcular estoque acumulado para toda a série
+            df_saldo = self._recalcular_estoque_acumulado(df_saldo)
+            
+        else:
+            # Se não existe arquivo, fazer cálculo completo
+            self.logger.info("Arquivo SALDOMENSAL.parquet não existe. Fazendo cálculo completo.")
+            
+            # 1. Carregar e combinar todos os tipos de dados
+            df_combined = self._carregar_e_combinar_dados(anos, meses)
+            
+            if df_combined.is_empty():
+                self.logger.warning("Nenhum dado encontrado para o periodo especificado")
+                return
+            
+            # 2. Aplicar transformacoes conforme arquivo de referencia
+            df_processed = self._processar_dados(df_combined)
+            
+            # 3. Calcular saldo por competencia
+            df_saldo = self._calcular_saldo_por_competencia(df_processed)
         
         # 4. Salvar resultado
-        output_path = self.parquet_path / "SALDOMENSAL.parquet"
         df_saldo.write_parquet(output_path)
         
         self.logger.debug(f"Saldo mensal salvo em: {output_path}")
@@ -57,6 +106,7 @@ class SaldoService:
         # Carregar dados de movimentacao (MOV)
         df_mov = self._carregar_dados_tipo(anos, meses, "CAGEDMOV")
         if not df_mov.is_empty():
+            df_mov = self._padronizar_colunas(df_mov, "MOV")
             df_mov = df_mov.with_columns(pl.lit("MOV").alias("Tipo"))
             dfs.append(df_mov)
             self.logger.debug(f"Carregados {df_mov.height} registros MOV")
@@ -64,6 +114,7 @@ class SaldoService:
         # Carregar dados de exclusao (EXC)
         df_exc = self._carregar_dados_tipo(anos, meses, "CAGEDEXC")
         if not df_exc.is_empty():
+            df_exc = self._padronizar_colunas(df_exc, "EXC")
             # Aplicar transformacao nas exclusoes conforme arquivo de referencia
             # Os valores do saldo movimentacao sao multiplicados por (-1) pois exclusoes de admissoes 
             # diminuem o saldo e exclusoes de desligamentos aumentam o saldo.
@@ -82,6 +133,7 @@ class SaldoService:
         # Carregar dados fora do prazo (FOR)
         df_for = self._carregar_dados_tipo(anos, meses, "CAGEDFORA")
         if not df_for.is_empty():
+            df_for = self._padronizar_colunas(df_for, "FOR")
             df_for = df_for.with_columns(pl.lit("FOR").alias("Tipo"))
             dfs.append(df_for)
             self.logger.debug(f"Carregados {df_for.height} registros FOR")
@@ -108,6 +160,55 @@ class SaldoService:
             return pl.DataFrame()
         
         return pl.read_parquet(arquivos)
+
+    def _padronizar_colunas(self, df: pl.DataFrame, tipo_arquivo: str) -> pl.DataFrame:
+        """
+        Padroniza as colunas dos diferentes tipos de arquivo CAGED para permitir concatenação.
+        
+        Args:
+            df: DataFrame a ser padronizado
+            tipo_arquivo: Tipo do arquivo (MOV, EXC, FOR)
+            
+        Returns:
+            DataFrame com colunas padronizadas
+        """
+        # Definir colunas padrão baseadas no CAGEDMOV (que tem mais colunas)
+        colunas_padrao = [
+            'COMPETENCIA_MOV', 'REGIAO', 'UF', 'MUNICIPIO', 'SECAO', 'SUBCLASSE', 
+            'SALDO_MOVIMENTACAO', 'CBO2002_OCUPACAO', 'CATEGORIA', 'GRAU_INSTRUCAO', 
+            'IDADE', 'HORAS_CONTRATUAIS', 'RACA_COR', 'SEXO', 'TIPO_EMPREGADOR', 
+            'TIPO_ESTABELECIMENTO', 'TIPO_MOVIMENTACAO', 'TIPO_DEFICIENCIA', 
+            'IND_TRAB_INTERMITENTE', 'IND_TRAB_PARCIAL', 'SALARIO', 'TAM_ESTAB_JAN', 
+            'IND_APRENDIZ', 'ORIGEM_INFORMACAO', 'COMPETENCIA_DEC', 'COMPETENCIA_EXC', 
+            'INDICADOR_EXCLUSAO', 'INDICADOR_FORA_PRAZO', 'IDADE_2', 'VALOR_SALARIO_FIXO', 
+            'ANO_MES', 'ANO', 'MES'
+        ]
+        
+        # Adicionar colunas faltantes com valores apropriados baseados no tipo
+        for coluna in colunas_padrao:
+            if coluna not in df.columns:
+                # Definir valor padrão baseado no tipo esperado da coluna
+                if coluna in ['COMPETENCIA_EXC', 'INDICADOR_EXCLUSAO', 'INDICADOR_FORA_PRAZO']:
+                    # Colunas de indicadores - usar string vazia
+                    df = df.with_columns(pl.lit("").cast(pl.Utf8).alias(coluna))
+                elif coluna in ['COMPETENCIA_MOV', 'COMPETENCIA_DEC', 'ORIGEM_INFORMACAO', 'ANO_MES']:
+                    # Colunas de texto - usar string vazia
+                    df = df.with_columns(pl.lit("").cast(pl.Utf8).alias(coluna))
+                elif coluna in ['ANO', 'MES', 'IDADE_2']:
+                    # Colunas numéricas inteiras - usar 0
+                    df = df.with_columns(pl.lit(0).cast(pl.Int32).alias(coluna))
+                elif coluna in ['VALOR_SALARIO_FIXO']:
+                    # Colunas numéricas decimais - usar 0.0
+                    df = df.with_columns(pl.lit(0.0).cast(pl.Float64).alias(coluna))
+                else:
+                    # Para outras colunas, tentar inferir o tipo da primeira coluna similar
+                    df = df.with_columns(pl.lit("").cast(pl.Utf8).alias(coluna))
+        
+        # Reordenar colunas para manter consistência
+        colunas_existentes = [col for col in colunas_padrao if col in df.columns]
+        df = df.select(colunas_existentes)
+        
+        return df
 
     def _tratar_tipos_dados(self, df: pl.DataFrame) -> pl.DataFrame:
         """
@@ -176,7 +277,7 @@ class SaldoService:
         tipos_nao_reconhecidos = df.filter(pl.col("Movimentacao").is_null())
         if tipos_nao_reconhecidos.height > 0:
             tipos_unicos = tipos_nao_reconhecidos.select("TIPO_MOVIMENTACAO").unique().to_series().to_list()
-            self.logger.warning(f"Tipos de movimentação não reconhecidos ({tipos_nao_reconhecidos.height} registros): {tipos_unicos[:10]}")
+            self.logger.debug(f"Tipos de movimentação não reconhecidos ({tipos_nao_reconhecidos.height} registros): {tipos_unicos[:10]}")
         
         # Filtrar apenas registros com movimentacao valida
         df = df.filter(pl.col("Movimentacao").is_not_null())
@@ -228,8 +329,7 @@ class SaldoService:
             pl.col("Admissoes").alias("admissoes"),
             pl.col("Desligamentos").alias("desligamentos"),
             pl.col("Saldo_Mensal").alias("saldo_mensal"),
-            pl.col("Saldo_Acumulado").alias("estoque"),
-            pl.lit("AGREGADO").alias("cnpj")
+            pl.col("Saldo_Acumulado").alias("estoque")
         ])
         
         return df_saldo
@@ -308,7 +408,7 @@ class SaldoService:
             df_novos = self._calcular_saldo_competencias_especificas(competencias_novas)
             
             if df_novos.is_empty():
-                self.logger.warning("Nenhum dado novo encontrado para processar")
+                self.logger.debug("Nenhum dado novo encontrado para processar")
                 return df_existente
             
             # Combinar dados existentes com novos
@@ -378,8 +478,7 @@ class SaldoService:
             pl.col("Admissoes").alias("admissoes"),
             pl.col("Desligamentos").alias("desligamentos"),
             pl.col("Saldo_Mensal").alias("saldo_mensal"),
-            pl.lit(0).alias("estoque"),  # Será recalculado
-            pl.lit("AGREGADO").alias("cnpj")
+            pl.lit(0).alias("estoque")  # Será recalculado
         ])
         
         return df_saldo
