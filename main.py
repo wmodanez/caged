@@ -1,17 +1,14 @@
 #!/usr/bin/env python3
 """
-Processador de Dados CAGED - Versão Refatorada
+Processador de Dados CAGED
 Script principal para download, processamento e consolidação de dados mensais
 
-Versão: 3.0.0 - Implementação do Item 1.4 do Plano de Melhorias
-Data: 2024
-
-Melhorias implementadas:
-- Estrutura de arquivos refatorada
-- Nova arquitetura CLI modular
+Funcionalidades:
+- Estrutura de arquivos organizada
+- Arquitetura CLI modular
 - Sistema de configuração YAML
 - Pipeline de processamento otimizado
-- Validações centralizadas aprimoradas
+- Validações centralizadas
 """
 
 import sys
@@ -20,7 +17,7 @@ from pathlib import Path
 # Adicionar src ao path para imports
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
-# Importar CLI refatorada
+# Importar CLI
 from src.cli.commands import cli
 
 

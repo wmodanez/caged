@@ -1,14 +1,14 @@
 # 🎯 Sistema CAGED
 
-Sistema automatizado para download, processamento e consolidação de dados mensais do **Cadastro Geral de Empregados e Desempregados (CAGED)** com arquitetura refatorada e CLI unificada.
+Sistema automatizado para download, processamento e consolidação de dados mensais do **Cadastro Geral de Empregados e Desempregados (CAGED)** com arquitetura modular e CLI unificada.
 
 ## 🚀 Características
 
 - **📊 Dados Mensais**: Processamento de dados de movimentação do mercado de trabalho formal
 - **🔄 Pipeline Automatizado**: Download, descompactação, conversão e consolidação
-- **⚡ Processamento Paralelo**: Otimizado para grandes volumes de dados
-- **📦 Formato Parquet**: Arquivos compactos e otimizados para análise
-- **🎛️ CLI Unificada**: Interface de linha de comando refatorada e intuitiva
+- **⚡ Processamento Paralelo**: Preparado para grandes volumes de dados
+- **📦 Formato Parquet**: Arquivos compactos e eficientes para análise
+- **🎛️ CLI Unificada**: Interface de linha de comando intuitiva
 - **🏗️ Arquitetura Modular**: Estrutura organizada em módulos especializados
 - **⚙️ Sistema de Configuração**: Configuração centralizada e flexível
 - **🔧 Pipeline Avançado**: Sistema de processamento com estágios configuráveis
@@ -17,21 +17,25 @@ Sistema automatizado para download, processamento e consolidação de dados mens
 - **🔄 Sistema de Recovery**: Checkpoints automáticos e recuperação de falhas
 - **📁 Organização Hierárquica**: Estrutura de diretórios espelhando o servidor FTP (AAAA/AAAAMM)
 - **🎯 Processamento Anual Simplificado**: Processa todos os meses automaticamente com `--ano` apenas
+- **📋 Processamento Completo CAGED**: Suporte automático para todos os tipos de arquivo (CAGEDMOV, CAGEDEXC, CAGEDFORA)
+- **📊 Cálculo de Saldo e Estoque**: Sistema completo de cálculo de saldo mensal e estoque acumulado
+- **🔧 Padronização Automática**: Harmonização automática de colunas entre diferentes tipos de arquivo
 
-## 🆕 Mudanças Recentes
+## 🎯 Funcionalidades
 
-### ✨ Funcionalidades Implementadas
-
-- **🎯 Processamento Anual Automático**: Agora você pode processar todos os meses de um ano usando apenas `python main.py processar --ano 2024`, eliminando a necessidade do parâmetro `--todos-meses`
+- **🎯 Processamento Anual Automático**: Processa todos os meses de um ano usando apenas `python main.py processar --ano 2024`
 - **📁 Estrutura de Diretórios Hierárquica**: Os arquivos baixados são organizados em `files-zip/AAAA/AAAAMM/` espelhando a estrutura do servidor FTP
-- **🔄 Atualização do FTP Service**: Adaptado para navegar corretamente na estrutura do Novo CAGED (`/pdet/microdados/NOVO CAGED`)
-- **📋 CLI Simplificada**: Interface mais intuitiva com comportamento padrão inteligente
-- **⚡ Paralelismo Entre Estágios**: O processamento paralelo entre estágios (download, extração, conversão) é o comportamento padrão, permitindo que a extração comece assim que o primeiro download termina, sem esperar todos os downloads
-- **Validação Aprimorada**: Lógica de validação de parâmetros mais flexível e intuitiva
-- **Organização de Arquivos**: Estrutura de pastas que facilita a localização e gerenciamento dos dados
-- **Compatibilidade Mantida**: Todos os comandos existentes continuam funcionando normalmente
-- **⚡ Paralelismo Automático**: O sistema calcula automaticamente o número ideal de workers (75% dos cores disponíveis) quando não especificado
-- **🔄 Pipeline Otimizado**: Paralelismo entre estágios como padrão, permitindo que a extração comece assim que o primeiro download termina, sem esperar todos os downloads
+- **🔄 Integração com FTP Service**: Navega corretamente na estrutura do CAGED (`/pdet/microdados/NOVO CAGED`)
+- **📋 CLI Intuitiva**: Interface com comportamento padrão inteligente
+- **⚡ Paralelismo Entre Estágios**: O processamento paralelo entre estágios (download, extração, conversão) permite que a extração comece assim que o primeiro download termina
+- **📋 Processamento Completo de Arquivos CAGED**: Sistema identifica e processa automaticamente todos os tipos de arquivo CAGED (CAGEDMOV, CAGEDEXC, CAGEDFORA)
+- **📊 Cálculo Automático de Saldo**: Cálculo completo de saldo mensal e estoque acumulado seguindo a metodologia oficial do CAGED
+- **🔧 Padronização de Colunas**: Sistema automático de harmonização de colunas entre diferentes tipos de arquivo
+- **🎯 Tratamento de Ajustes**: Processamento de exclusões (CAGEDEXC) e movimentações fora do prazo (CAGEDFORA) com aplicação de sinais adequados
+- **🔍 Validação Robusta**: Lógica de validação de parâmetros flexível e intuitiva
+- **📁 Organização de Arquivos**: Estrutura de pastas que facilita a localização e gerenciamento dos dados
+- **⚡ Paralelismo Automático**: O sistema calcula automaticamente o número ideal de workers (75% dos cores disponíveis)
+- **🔄 Pipeline Eficiente**: Paralelismo entre estágios permitindo que a extração comece assim que o primeiro download termina
 
 ## 📋 Requisitos
 
@@ -78,6 +82,12 @@ python main.py processar --ano 2024 --mes 1 --extract
 # Apenas conversão
 python main.py processar --ano 2024 --mes 1 --convert
 
+# Cálculo de saldo mensal
+python main.py processar --ano 2024 --mes 1 --calculate-saldo
+
+# Processamento completo incluindo cálculo de saldo
+python main.py processar --ano 2024 --mes 1 --convert --calculate-saldo
+
 # Pular etapas específicas
 python main.py processar --ano 2024 --mes 1 --skip-download --skip-extract --skip-convert
 
@@ -97,6 +107,71 @@ python main.py --config config/custom.yaml processar --ano 2024 --mes 1
 # Usar profile de configuração
 python main.py --profile producao processar --ano 2024 --mes 1
 ```
+
+## 📊 Cálculo do Estoque de Empregos CAGED
+
+O cálculo do estoque de empregos no CAGED (Cadastro Geral de Empregados e Desempregados), no contexto do CAGED integrado ao eSocial desde 2020, é uma medida do total de vínculos formais ativos em uma data específica. Ele reflete o saldo acumulado de admissões e desligamentos, ajustado por correções como movimentações fora do prazo e exclusões. Esses elementos são extraídos dos arquivos de dados disponíveis para download no portal do Ministério do Trabalho e Emprego, e o processo envolve consolidação de informações do eSocial e do sistema CAGED legado, com tratamentos para evitar erros e duplicidades.
+
+### 🧮 Cálculo Básico do Estoque
+
+O estoque de empregos é calculado de forma iterativa, mês a mês, com base em um estoque inicial (geralmente ancorado na RAIS - Relação Anual de Informações Sociais, que fornece o estoque anual consolidado). A fórmula geral é:
+
+**Estoque final (t) = Estoque inicial (t-1) + Admissões (t) - Desligamentos (t) + Ajustes (fora do prazo e exclusões)**
+
+- **Estoque inicial (t-1)**: Vem do mês anterior ou de uma base histórica (como a RAIS para o início da série).
+- **Admissões (t)**: Contratos formais registrados no período.
+- **Desligamentos (t)**: Demissões, rescisões ou términos de contrato no período.
+- **Ajustes**: Incluem incorporações retroativas de movimentações fora do prazo e subtrações por exclusões, que podem alterar estoques de meses anteriores.
+
+Esse cálculo é dinâmico, pois os dados são reprocessados mensalmente para incorporar correções, garantindo que a série histórica seja mantida atualizada. Por exemplo, se uma empresa declara uma admissão de janeiro em outubro, isso ajusta o estoque de janeiro retroativamente.
+
+### 📁 Consideração dos Arquivos Baixados
+
+Os arquivos de dados do CAGED (disponíveis no portal gov.br) são divididos em categorias que alimentam diretamente esse cálculo. Aqui vai como cada um é integrado:
+
+1. **Arquivo de Movimentação (no prazo)**:
+   - Contém admissões e desligamentos declarados até o dia 15 do mês seguinte à competência (ex.: movimentações de setembro declaradas até 15 de outubro).
+   - Esses dados formam a base principal do saldo mensal (admissões - desligamentos).
+   - São incorporados imediatamente no cálculo do estoque do mês corrente. Por exemplo, se houver 2 milhões de admissões e 1,8 milhões de desligamentos em um mês, o saldo contribui +200 mil para o estoque.
+
+2. **Arquivo de Movimentação Fora do Prazo**:
+   - Inclui declarações atrasadas, relativas a competências anteriores (podem retroagir até 2011, dependendo do caso).
+   - São incorporadas retroativamente, ajustando os estoques históricos. Isso significa que o estoque de um mês passado pode ser revisado para cima ou para baixo quando declarações adicionais chegam.
+   - Exemplo: No período de janeiro a abril de 2021, havia cerca de 278 mil movimentações fora do prazo; em maio de 2021, esse número subiu para 774 mil devido à transição para o eSocial (Grupo 3), mas após cruzamentos e verificações, 97,8% das admissões e 97% das demissões foram validadas e integradas.
+   - Impacto: Aumenta a precisão, mas pode causar variações nos dados divulgados mensalmente (representando cerca de 2-3% das movimentações totais em períodos de transição).
+
+3. **Arquivo de Exclusões**:
+   - Registra remoções de movimentações informadas erroneamente (via evento S-3000 no eSocial, disponível desde outubro de 2021, com retroatividade a janeiro de 2020).
+   - São subtraídas retroativamente do estoque. Por exemplo, entre abril de 2020 e outubro de 2021, foram excluídas 103.099 admissões e 54.850 demissões, impactando o saldo negativo em certos meses (ex.: -20.206 no saldo de maio de 2021).
+   - Essas exclusões são tratadas como correções e mantidas nos microdados com indicativos, permitindo rastreabilidade.
+
+### 🔧 Passos Metodológicos Detalhados
+
+De acordo com notas técnicas oficiais, o processo segue estes passos principais para consolidação e cálculo:
+
+1. **Coleta e Consolidação Inicial**: Dados do eSocial (priorizados) e CAGED são reunidos. Em casos de duplicidade (mesma movimentação em ambos os sistemas), prevalece o eSocial. Chaves como CNPJ raiz, CPF, competência e tipo de movimentação são usadas para cruzamentos e eliminação de duplicados.
+
+2. **Imputação de Dados Faltantes**: Se uma empresa declara admissão mas não desligamento, usa-se dados do Empregador Web para imputar desligamentos, evitando subestimação do estoque.
+
+3. **Incorporação de Ajustes**: Movimentações fora do prazo e exclusões são adicionadas/subtraídas retroativamente, reprocessando a série histórica. Isso é feito mensalmente, sem alterar a análise conjuntural geral (impacto médio de 2,78% nas movimentações de 2020-2021).
+
+4. **Validação e Divulgação**: Após tratamentos, o estoque é calculado e divulgado mensalmente, com microdados disponíveis para download (incluindo os arquivos mencionados).
+
+### ⚠️ Observações Importantes
+
+- **Transição para o eSocial**: Desde 2020, o CAGED usa principalmente o eSocial, o que aumentou as declarações fora do prazo durante fases de implementação, mas aprimorou a qualidade dos dados.
+- **Impacto nos Dados Históricos**: Devido aos ajustes, os estoques divulgados podem variar ligeiramente entre publicações mensais, mas isso é uma prática padrão em estatísticas trabalhistas para maior precisão.
+- **Fontes para Download**: Os arquivos estão no portal https://pdet.mte.gov.br/novo-caged, separados por tipo (movimentação, fora do prazo, exclusões), permitindo que usuários repliquem cálculos com ferramentas como planilhas ou software de análise.
+
+### 🎯 Implementação no Sistema
+
+Este sistema implementa fielmente a metodologia oficial do CAGED:
+
+- **Processamento Automático**: Identifica e processa todos os tipos de arquivo (CAGEDMOV, CAGEDEXC, CAGEDFORA)
+- **Aplicação de Ajustes**: Exclusões são aplicadas com sinal invertido, movimentações fora do prazo são incorporadas retroativamente
+- **Padronização**: Harmonização automática de colunas entre diferentes tipos de arquivo
+- **Cálculo Incremental**: Processamento eficiente do saldo mensal sem reprocessar dados já calculados
+- **Persistência**: Armazenamento em formato Parquet para consultas rápidas e análises posteriores
 
 ### 🔧 Opções Avançadas
 ```bash
@@ -188,7 +263,7 @@ O sistema oferece três modos de processamento:
    - Executa os estágios em paralelo para cada item
    - A extração de um item começa assim que seu download termina
    - A conversão de um item começa assim que sua extração termina
-   - Otimiza o uso de recursos e reduz o tempo total de processamento
+   - Gerencia o uso de recursos e reduz o tempo total de processamento
    - Número de workers calculado automaticamente (75% dos cores disponíveis)
 
 3. **🔄 Paralelismo Entre Itens** (com `--parallel-items`)
@@ -273,7 +348,7 @@ caged/
 
 ## ⚡ Sistema de Processamento Paralelo
 
-O sistema implementa dois tipos de processamento paralelo para otimizar performance:
+O sistema implementa dois tipos de processamento paralelo para melhorar performance:
 
 ### 🎯 Processamento Paralelo entre Itens
 Processa múltiplos itens (meses/anos) em paralelo:
@@ -304,7 +379,7 @@ Com este modo, assim que um download é concluído, a extração começa imediat
 |------|-----------|-------------|
 | **Sequencial** | Executa tudo em sequência | Recursos limitados |
 | **Paralelo entre Itens** | Múltiplos itens em paralelo | Muitos períodos diferentes |
-| **Paralelo entre Estágios** | Estágios em pipeline | Otimizar tempo total por item |
+| **Paralelo entre Estágios** | Estágios em pipeline | Reduzir tempo total por item |
 
 ### 📈 Benefícios de Performance
 
@@ -316,7 +391,7 @@ Com este modo, assim que um download é concluído, a extração começa imediat
 ### 📈 Benefícios de Performance
 
 - **Redução de Downloads**: Evita re-download de arquivos já processados
-- **Otimização de I/O**: Cache de arquivos extraídos e convertidos
+- **Gestão de I/O**: Cache de arquivos extraídos e convertidos
 - **Economia de Tempo**: Processamento até 80% mais rápido em re-execuções
 - **Economia de Banda**: Redução significativa no tráfego de rede
 
@@ -401,7 +476,7 @@ O sistema implementa um sistema completo de monitoramento e métricas para acomp
 ### 📈 Benefícios das Métricas
 
 - **Visibilidade**: Acompanhamento completo da performance do sistema
-- **Otimização**: Identificação de gargalos e oportunidades de melhoria
+- **Análise de Performance**: Identificação de gargalos e oportunidades de aprimoramento
 - **Monitoramento**: Alertas proativos para problemas de performance
 - **Análise**: Dados históricos para análise de tendências
 - **Relatórios**: Geração automática de relatórios detalhados
@@ -621,7 +696,7 @@ O sistema gera automaticamente diversos indicadores para análise do mercado de 
 ### 🎯 Características dos Indicadores
 - **Validação Automática**: Todos os indicadores passam por validação de consistência
 - **Tratamento de Erros**: Valores inválidos (NaN, infinito) são automaticamente filtrados
-- **Performance Otimizada**: Cálculos realizados com expressões Polars otimizadas
+- **Performance Eficiente**: Cálculos realizados com expressões Polars eficientes
 - **Flexibilidade**: Indicadores adaptam-se aos campos disponíveis nos dados
 
 ## 💡 Exemplos de Uso
@@ -641,7 +716,7 @@ python main.py processar --ano 2024 --mes 1 --validacao-rigorosa
 python main.py processar --ano 2024 --dry-run
 ```
 
-### ⚡ Processamento Otimizado
+### ⚡ Processamento Eficiente
 ```bash
 # Usar cache para acelerar reprocessamento
 python main.py processar --ano 2024 --mes 1 --use-cache
@@ -681,17 +756,17 @@ print(f"Taxa de sucesso: {report['summary']['overall_success_rate']:.1%}")
 
 ## 🎯 Status do Desenvolvimento
 
-### ✅ Fase 1: Refatoração e Estrutura (Concluída)
-- [x] ✅ Refatoração da estrutura de arquivos
+### ✅ Fase 1: Estrutura e Arquitetura (Concluída)
+- [x] ✅ Estrutura de arquivos organizada
 - [x] ✅ Sistema de configuração centralizado
 - [x] ✅ Hierarquia de exceções customizadas
 - [x] ✅ Pipeline de processamento avançado
 - [x] ✅ CLI unificada e intuitiva
-- [x] ✅ Migração de módulos para nova estrutura
-- [x] ✅ Sistema de logging refatorado
+- [x] ✅ Módulos organizados em estrutura modular
+- [x] ✅ Sistema de logging completo
 - [x] ✅ Sistema de validação robusto (26+ testes)
 
-### ⚡ Fase 2: Pipeline Otimizado (Concluída)
+### ⚡ Fase 2: Pipeline Eficiente (Concluída)
 - [x] ✅ Processamento paralelo (19 testes aprovados)
 - [x] ✅ Comando processar unificado (integração completa)
 - [x] ✅ Sistema de configuração YAML
@@ -725,13 +800,13 @@ print(f"Taxa de sucesso: {report['summary']['overall_success_rate']:.1%}")
 - [ ] **Dashboard Web de Monitoramento**: Interface web interativa para visualização de métricas
 - [ ] **Notificações em Tempo Real**: Sistema de alertas e notificações automáticas
 
-#### 3.3 Testes Automatizados - Melhorias Pendentes
+#### 3.3 Testes Automatizados - Pendentes
 - [ ] **Testes de Performance**: Benchmarks e testes de stress com grandes volumes
 - [ ] **Testes de Stress**: Validação com cargas extremas do sistema
 
 #### 3.4 Documentação e Exemplos
-- [x] ✅ **README Atualizado**: Incorporadas as funcionalidades de processamento anual automático e estrutura de diretórios
-- [ ] **Documentar Configurações**: Documentação completa de todas as opções de configuração
+- [x] ✅ **README Completo**: Documentação das funcionalidades de processamento anual automático e estrutura de diretórios
+- [ ] **Documentação de Configurações**: Documentação completa de todas as opções de configuração
 - [ ] **Exemplos Práticos**: Casos de uso reais e exemplos avançados
 - [ ] **FAQ**: Perguntas frequentes e solução de problemas comuns
 - [ ] **USAGE.md**: Exemplos detalhados de uso
@@ -739,22 +814,22 @@ print(f"Taxa de sucesso: {report['summary']['overall_success_rate']:.1%}")
 - [ ] **TROUBLESHOOTING.md**: Guia de solução de problemas
 - [ ] **CHANGELOG.md**: Histórico detalhado de mudanças
 
-### 📈 FASE 4: Otimização e Polimento
+### 📈 FASE 4: Performance e Polimento
 
-#### 4.1 Otimizações de Performance
+#### 4.1 Análise de Performance
 - [ ] **Profile de Performance**: Análise completa de performance do sistema
-- [ ] **Otimizar Operações Críticas**: Melhorias em gargalos identificados
+- [ ] **Operações Críticas**: Aprimoramentos em gargalos identificados
 - [ ] **Lazy Loading**: Implementação de carregamento sob demanda
-- [ ] **Compressão Inteligente**: Otimização de armazenamento e transferência
-- [ ] **Otimizar Uso de Memória**: Redução do footprint de memória
-- [ ] **Memory Management**: Processamento em chunks otimizado
-- [ ] **I/O Optimization**: Buffering inteligente para operações de arquivo
-- [ ] **Network Optimization**: Pool de conexões otimizado
-- [ ] **CPU Optimization**: Algoritmos mais eficientes
+- [ ] **Compressão Inteligente**: Gestão de armazenamento e transferência
+- [ ] **Uso de Memória**: Redução do footprint de memória
+- [ ] **Memory Management**: Processamento em chunks
+- [ ] **I/O Operations**: Buffering para operações de arquivo
+- [ ] **Network Management**: Pool de conexões
+- [ ] **CPU Operations**: Algoritmos eficientes
 
 #### 4.2 Interface de Usuário
 - [ ] **Progress Bars Avançadas**: Indicadores visuais mais detalhados e informativos
-- [ ] **Mensagens de Erro Melhoradas**: Mensagens mais claras e acionáveis
+- [ ] **Mensagens de Erro Aprimoradas**: Mensagens mais claras e acionáveis
 - [ ] **Sistema de Ajuda Interativo**: Help contextual e interativo
 - [ ] **Auto-completion**: Suporte para Bash/Zsh completion
 - [ ] **Modo Verbose/Quiet**: Controle granular de verbosidade
@@ -769,7 +844,7 @@ print(f"Taxa de sucesso: {report['summary']['overall_success_rate']:.1%}")
 ### 🎯 Critérios de Sucesso Pendentes
 
 #### Métricas Quantitativas
-- [ ] **Tempo de Setup**: Reduzir para <5 minutos para novo usuário
+- [ ] **Tempo de Setup**: Reduzir para <5 minutos para usuário
 - [ ] **Cobertura de Código**: Atingir 90%+ de cobertura
 
 #### Métricas Qualitativas
@@ -804,7 +879,7 @@ print(f"Taxa de sucesso: {report['summary']['overall_success_rate']:.1%}")
 Criação de um agente IA especializado para gerar aplicações Dash de forma automática e inteligente, integrado ao ecossistema Trae. Este agente seria capaz de:
 - Analisar dados do CAGED automaticamente
 - Gerar dashboards interativos personalizados
-- Criar visualizações otimizadas para análise de mercado de trabalho
+- Criar visualizações eficientes para análise de mercado de trabalho
 - Implementar componentes Dash reutilizáveis
 
 #### 🔧 Implementação no Trae
@@ -830,16 +905,16 @@ class DashAgent:
 #### 🎯 Capacidades Específicas
 - **Análise Automática de Dados**: Interpretação inteligente de estruturas de dados CAGED
 - **Geração de Layouts**: Criação automática de layouts Dash responsivos e intuitivos
-- **Componentes Plotly**: Implementação de gráficos otimizados para dados de emprego
+- **Componentes Plotly**: Implementação de gráficos eficientes para dados de emprego
 - **Callbacks Interativos**: Geração automática de interatividade entre componentes
-- **Otimização de Performance**: Implementação de best practices para aplicações Dash
+- **Performance**: Implementação de best practices para aplicações Dash
 - **Deployment Automático**: Configuração para deploy em diferentes ambientes
 
 #### 🚀 Funcionalidades
 1. **Geração Automática**: Criação completa de dashboards a partir de especificações
 2. **Integração CAGED**: Conectores nativos para dados do sistema CAGED
 3. **Templates Inteligentes**: Biblioteca de templates para diferentes tipos de análise
-4. **Otimizações**: Implementação automática de cache, lazy loading e performance
+4. **Performance**: Implementação automática de cache, lazy loading e eficiência
 5. **Responsividade**: Dashboards adaptáveis para desktop e mobile
 6. **Exportação**: Funcionalidades de export para PDF, PNG e dados
 
@@ -886,7 +961,7 @@ trae dash deploy \
 - **Dash Documentation**: https://dash.plotly.com/
 - **Plotly Python**: https://plotly.com/python/
 - **CAGED Data Structure**: Consultar `src/entities/` para estruturas de dados
-- **Performance Best Practices**: Implementar cache e otimizações automáticas
+- **Performance Best Practices**: Implementar cache e eficiência automática
 
 ---
 
