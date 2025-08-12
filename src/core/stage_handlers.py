@@ -910,6 +910,7 @@ class CalculateSaldoStageHandler(PipelineStageHandler):
         self.saldo_service = SaldoService(logger=self.logger)
         self.incremental = incremental
         self.logger.info(f"CalculateSaldoStageHandler initialized with incremental={self.incremental}")
+        self.logger.info(f"DEBUG: Parâmetro incremental recebido: {incremental}, tipo: {type(incremental)}")
 
     async def process(self, item: ProcessingItem) -> ProcessingResult:
         """Processa o cálculo do saldo para um item."""

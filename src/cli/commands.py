@@ -447,7 +447,7 @@ def processar(ctx, ano, mes, ano_inicio, mes_inicio, ano_fim, mes_fim,
             else:
                 # Modo padrão: paralelismo entre estágios
                 from src.core.stage_parallel_pipeline import create_stage_parallel_pipeline
-                stage_parallel_pipeline = create_stage_parallel_pipeline(config)
+                stage_parallel_pipeline = create_stage_parallel_pipeline(config, incremental_saldo=incremental, campos_selecionados=campos)
                 stage_parallel_pipeline.set_progress_callback(progress_callback)
                 stage_parallel_pipeline.set_error_callback(error_callback)
                 
@@ -729,6 +729,10 @@ def _determine_processing_stages(download, extract, convert, calculate_saldo, co
         stages.append(ProcessingStage.CONVERT)
     
     if calculate_saldo or (not skip_calculate_saldo and not any([download, extract, convert, consolidate])):
+        # Se calculate_saldo foi solicitado, verificar se precisamos incluir convert automaticamente
+        if not skip_convert and ProcessingStage.CONVERT not in stages:
+            # Incluir convert automaticamente para garantir que os arquivos parquet existam
+            stages.append(ProcessingStage.CONVERT)
         stages.append(ProcessingStage.CALCULATE_SALDO)
     
     # Consolidação é incluída por padrão, exceto se explicitamente pulada

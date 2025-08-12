@@ -273,6 +273,135 @@ class SaldoService:
     def calcular_e_atualizar_saldo_incremental(self, anos: List[int], meses: List[int]):
         """
         Método para cálculo incremental de saldo.
-        Por enquanto, chama o método padrão.
+        Carrega dados existentes e adiciona apenas os novos meses.
         """
-        return self.calcular_saldo_mensal(anos, meses)
+        output_path = self.parquet_path / "SALDOMENSAL.parquet"
+        
+        # Verificar se já existe arquivo de saldo
+        if output_path.exists():
+            self.logger.info("Carregando dados de saldo existentes para atualização incremental")
+            df_existente = pl.read_parquet(output_path)
+            
+            # Obter competências já processadas
+            competencias_existentes = set(df_existente["competencia"].to_list())
+            self.logger.info(f"Competências já processadas: {sorted(competencias_existentes)}")
+            
+            # Filtrar apenas competências novas
+            competencias_novas = []
+            for ano in anos:
+                for mes in meses:
+                    competencia = f"{ano}{mes:02d}"
+                    if competencia not in competencias_existentes:
+                        competencias_novas.append((ano, mes))
+            
+            if not competencias_novas:
+                self.logger.info("Nenhuma competência nova para processar")
+                return df_existente
+            
+            # Extrair anos e meses das competências novas
+            anos_novos = list(set([comp[0] for comp in competencias_novas]))
+            meses_novos = list(set([comp[1] for comp in competencias_novas]))
+            
+            self.logger.info(f"Processando competências novas: {[f'{ano}{mes:02d}' for ano, mes in competencias_novas]}")
+            
+            # Calcular saldo apenas para as competências novas
+            df_novos = self._calcular_saldo_competencias_especificas(competencias_novas)
+            
+            if df_novos.is_empty():
+                self.logger.warning("Nenhum dado novo encontrado para processar")
+                return df_existente
+            
+            # Combinar dados existentes com novos
+            df_combinado = pl.concat([df_existente, df_novos], how="vertical")
+            
+            # Reordenar por competência
+            df_combinado = df_combinado.sort("competencia")
+            
+            # Recalcular estoque acumulado para toda a série
+            df_combinado = self._recalcular_estoque_acumulado(df_combinado)
+            
+            # Salvar resultado
+            df_combinado.write_parquet(output_path)
+            self.logger.info(f"Saldo incremental atualizado salvo em {output_path}")
+            
+            return df_combinado
+        else:
+            # Se não existe arquivo, fazer cálculo completo
+            self.logger.info("Arquivo de saldo não existe. Fazendo cálculo completo.")
+            return self.calcular_saldo_mensal(anos, meses)
+    
+    def _calcular_saldo_competencias_especificas(self, competencias: List[tuple]) -> pl.DataFrame:
+        """
+        Calcula saldo apenas para competências específicas.
+        """
+        anos = list(set([comp[0] for comp in competencias]))
+        meses = list(set([comp[1] for comp in competencias]))
+        
+        # Carregar e combinar dados
+        df = self._carregar_e_combinar_dados(anos, meses)
+        
+        if df.is_empty():
+            return pl.DataFrame()
+        
+        # Processar dados
+        df = self._processar_dados(df)
+        
+        # Filtrar apenas as competências específicas
+        competencias_str = [f"{ano}{mes:02d}" for ano, mes in competencias]
+        df = df.filter(pl.col("Competencia").is_in(competencias_str))
+        
+        if df.is_empty():
+            return pl.DataFrame()
+        
+        # Calcular saldo (sem estoque acumulado, será recalculado depois)
+        df_agregado = df.group_by(["Competencia", "Movimentacao"]).agg([
+            pl.col("SALDO_MOVIMENTACAO").sum().alias("Total_Saldo"),
+            pl.len().alias("Quantidade_Registros")
+        ])
+        
+        # Pivotar para ter admissoes e desligamentos como colunas
+        df_pivot = df_agregado.pivot(
+            index="Competencia",
+            columns="Movimentacao",
+            values="Total_Saldo"
+        ).fill_null(0)
+        
+        # Corrigir os desligamentos para valores positivos e calcular saldo mensal
+        df_saldo = df_pivot.with_columns([
+            pl.col("Desligamentos").abs().alias("Desligamentos"),
+            (pl.col("Admissoes") - pl.col("Desligamentos").abs()).alias("Saldo_Mensal")
+        ])
+        
+        # Formatar colunas finais
+        df_saldo = df_saldo.select([
+            pl.col("Competencia").alias("competencia"),
+            pl.col("Admissoes").alias("admissoes"),
+            pl.col("Desligamentos").alias("desligamentos"),
+            pl.col("Saldo_Mensal").alias("saldo_mensal"),
+            pl.lit(0).alias("estoque"),  # Será recalculado
+            pl.lit("AGREGADO").alias("cnpj")
+        ])
+        
+        return df_saldo
+    
+    def _recalcular_estoque_acumulado(self, df: pl.DataFrame) -> pl.DataFrame:
+        """
+        Recalcula o estoque acumulado para toda a série temporal.
+        """
+        # Ordenar por competência
+        df = df.sort("competencia")
+        
+        # Implementar estoque inicial para janeiro de 2020
+        estoque_inicial_jan_2020 = 39054507
+        
+        # Calcular saldo acumulado com estoque inicial
+        df = df.with_columns([
+            # Para janeiro de 2020, somar o estoque inicial ao saldo mensal
+            pl.when(pl.col("competencia") == "202001")
+            .then(estoque_inicial_jan_2020 + pl.col("saldo_mensal"))
+            .otherwise(pl.col("saldo_mensal"))
+            .cum_sum()
+            .alias("estoque")
+        ])
+        
+        return df

@@ -589,7 +589,7 @@ class StageParallelPipeline(CAGEDPipeline):
         self.logger.info(f"❌ Falhas: {actual_failure_count}/{len(results)} ({failure_percent:.1f}%)")
 
 
-def create_stage_parallel_pipeline(config: Optional[CAGEDConfig] = None) -> StageParallelPipeline:
+def create_stage_parallel_pipeline(config: Optional[CAGEDConfig] = None, incremental_saldo: bool = False, campos_selecionados: Optional[str] = None) -> StageParallelPipeline:
     """
     Cria e configura um pipeline com estágios paralelos
     """
@@ -599,7 +599,7 @@ def create_stage_parallel_pipeline(config: Optional[CAGEDConfig] = None) -> Stag
     pipeline = StageParallelPipeline(config)
     
     # Registrar handlers de estágio
-    handlers = create_stage_handlers(config)
+    handlers = create_stage_handlers(config, incremental_saldo=incremental_saldo, campos_selecionados=campos_selecionados)
     for stage, handler in handlers.items():
         pipeline.register_stage_handler(stage, handler)
     
